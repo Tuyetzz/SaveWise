@@ -54,11 +54,15 @@ def test_nothing_is_written_while_the_person_is_still_visible(tmp_path):
     assert rows(tmp_path) == []
 
 
-def test_sighting_is_written_when_the_track_disappears(tmp_path):
+def test_sighting_is_written_once_the_track_has_been_gone_for_the_grace_period(
+    tmp_path,
+):
     r = rec(tmp_path)
     r.observe([track()], FRAME, now=0.0)
     r.finalise_absent({1}, now=0.0)
-    r.finalise_absent(set(), now=1.0)
+    r.finalise_absent(set(), now=1.0)  # inside the 1.5s grace -- still open
+    assert rows(tmp_path) == []
+    r.finalise_absent(set(), now=2.0)  # past it -- now closed
     assert len(rows(tmp_path)) == 1
 
 
@@ -204,6 +208,64 @@ def test_the_saved_image_is_the_peak_confidence_frame(tmp_path):
     r.close()
     saved = cv2.imread(str(tmp_path / rows(tmp_path)[0]["best_frame"]))
     assert saved.mean() > 200
+
+
+def test_a_dropped_frame_does_not_split_one_person_into_two_sightings(tmp_path):
+    """The measured defect: at camera-module noise levels the detector misses
+    ~23% of frames, and closing on the first miss logged one person ~9 times."""
+    r = rec(tmp_path)
+    r.observe([track()], FRAME, now=0.0)
+    r.finalise_absent({1}, now=0.0)
+    r.finalise_absent(set(), now=0.2)  # missed frame, inside the grace window
+    r.observe([track()], FRAME, now=0.4)  # same ByteTrack id returns
+    r.finalise_absent({1}, now=0.4)
+    r.close()
+    assert len(rows(tmp_path)) == 1
+
+
+def test_a_long_absence_still_closes_the_sighting(tmp_path):
+    r = rec(tmp_path)
+    r.observe([track()], FRAME, now=0.0)
+    r.finalise_absent(set(), now=5.0)
+    assert len(rows(tmp_path)) == 1
+    r.observe([track()], FRAME, now=6.0)
+    r.close()
+    assert len(rows(tmp_path)) == 2
+
+
+def test_duration_reports_time_actually_seen_not_the_grace_period(tmp_path):
+    r = rec(tmp_path)
+    r.observe([track()], FRAME, now=0.0)
+    r.observe([track()], FRAME, now=2.0)
+    r.finalise_absent(set(), now=9.0)
+    assert rows(tmp_path)[0]["duration_s"] == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize("drop_rate", [0.0, 0.1, 0.23, 0.4])
+def test_one_person_is_one_sighting_at_every_realistic_dropout_rate(
+    tmp_path, drop_rate
+):
+    """The demo's central claim, as a test."""
+    import random
+
+    rng = random.Random(0)
+    r = rec(tmp_path)
+    for i in range(60):
+        now = i * 0.1
+        seen = rng.random() >= drop_rate
+        tracks = [track()] if seen else []
+        r.observe(tracks, FRAME, now)
+        r.finalise_absent({t.track_id for t in tracks}, now)
+    r.close()
+    assert len(rows(tmp_path)) == 1
+
+
+def test_journey_duration_covers_the_whole_run(tmp_path):
+    r = rec(tmp_path)
+    r.observe([], FRAME, now=100.0)
+    r.observe([track()], FRAME, now=104.5)
+    r.close()
+    assert r.journey_duration_s == pytest.approx(4.5)
 
 
 def test_every_row_declares_the_schema(tmp_path):

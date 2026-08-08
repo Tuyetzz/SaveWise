@@ -53,3 +53,10 @@ class Config:
     save_frames: bool = True  # one best frame per sighting
     jpeg_quality: int = 90
     confidence_sample_interval: float = 1.0  # display only; logs stay per-frame
+
+    # Grace before a sighting closes. Sized against ByteTrack's default
+    # track_buffer (30 frames, ~2-3 s at our rates): a track returning inside
+    # that window still carries the SAME id, so the returning detection rejoins
+    # its sighting. A grace LONGER than the buffer would be actively harmful --
+    # the person comes back with a new id and we would be merging strangers.
+    sighting_gap_s: float = 1.5

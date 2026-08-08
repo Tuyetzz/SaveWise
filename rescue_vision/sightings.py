@@ -59,6 +59,7 @@ class SightingRecorder:
         self._best_frame: dict[int, np.ndarray] = {}
         self._done: list[Sighting] = []
         self._next_id = 1
+        self._last_seen_any = 0.0
 
     def observe(
         self, tracks: list[TrackState], annotated_frame: np.ndarray, now: float
@@ -66,6 +67,7 @@ class SightingRecorder:
         """Fold this frame's confirmed tracks into their open sightings."""
         if self._start is None:
             self._start = now
+        self._last_seen_any = now - self._start
         for t in tracks:
             if not t.confirmed:
                 continue
@@ -106,10 +108,28 @@ class SightingRecorder:
                     s.closest_distance_m = t.distance_m
 
     def finalise_absent(self, visible_track_ids: Iterable[int], now: float) -> None:
-        """Close any sighting whose track is no longer being reported."""
+        """Close sightings whose track has been gone longer than the grace period.
+
+        Closing on the first missing frame was wrong: the detector legitimately
+        drops frames (~23% under camera-module noise), and each miss split one
+        person into another sighting -- ~9.4 records for a single person at that
+        rate, which makes the log worthless. ByteTrack holds the id across the
+        gap; this waits for it rather than throwing that away.
+        """
+        if self._start is None:
+            return
         visible = set(visible_track_ids)
-        for track_id in [tid for tid in self._open if tid not in visible]:
-            self._finalise(track_id)
+        elapsed = now - self._start
+        for track_id, s in list(self._open.items()):
+            if track_id in visible:
+                continue
+            if elapsed - s.last_seen_s >= self._cfg.sighting_gap_s:
+                self._finalise(track_id)
+
+    @property
+    def journey_duration_s(self) -> float:
+        """Wall time from the first observed frame to the most recent one."""
+        return self._last_seen_any
 
     def close(self) -> None:
         """Finalise everything still open -- the journey ended mid-sighting."""

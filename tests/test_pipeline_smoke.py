@@ -82,13 +82,23 @@ def test_an_empty_journey_logs_nothing(tmp_path):
     assert sightings(tmp_path) == []
 
 
-def test_a_person_leaving_frame_closes_their_sighting_immediately(tmp_path):
-    script = [[person_at(320.0)], [person_at(320.0)], [], [], []]
+def test_a_brief_detection_gap_does_not_close_a_sighting(tmp_path):
+    """The person is still there; the detector just missed a frame."""
+    script = [[person_at(320.0)], [], [person_at(320.0)], [person_at(320.0)]]
     pipeline, _, _ = build(tmp_path, script)
-    results = [pipeline.process_frame(FRAME, i) for i in range(5)]
-    assert results[1].sightings_so_far == 0  # still visible, not yet closed
-    assert results[2].sightings_so_far == 1  # gone, record written
-    assert results[4].tracks == []
+    results = [pipeline.process_frame(FRAME, i) for i in range(4)]
+    assert all(r.sightings_so_far == 0 for r in results)
+    assert sightings(tmp_path) == []
+
+
+def test_a_person_leaving_frame_closes_their_sighting_after_the_grace_period(tmp_path):
+    cfg = Config(n_confirm=1, sighting_gap_s=0.25)  # FakeClock steps 0.1s
+    script = [[person_at(320.0)], [person_at(320.0)], [], [], [], []]
+    pipeline, _, _ = build(tmp_path, script, cfg=cfg)
+    results = [pipeline.process_frame(FRAME, i) for i in range(6)]
+    assert results[1].sightings_so_far == 0  # still visible
+    assert results[-1].sightings_so_far == 1  # gone long enough, record written
+    assert results[-1].tracks == []
 
 
 def test_unconfirmed_tracks_never_reach_the_journey_log(tmp_path):
