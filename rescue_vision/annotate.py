@@ -35,6 +35,48 @@ def format_label(t: TrackState) -> str:
     )
 
 
+def place_label(
+    x: int,
+    y: int,
+    tw: int,
+    th: int,
+    frame_w: int,
+    frame_h: int,
+    occupied: list[tuple[int, int, int, int]],
+) -> tuple[int, int]:
+    """Find a spot for a label strip that is on-screen and not already taken.
+
+    Two people standing close together is the normal multi-person case, and
+    naive placement overdraws one label with the other -- the confidence score
+    of the occluded track becomes unreadable. Equally, a person at the frame
+    edge is where a sweep first finds them, and their label would otherwise run
+    off-screen.
+
+    Returns the (x, baseline_y) for a strip of size tw x th. The strip occupies
+    (x, y - th) to (x + tw, y).
+    """
+    pad = 4
+    x = max(0, min(x, frame_w - tw - pad))
+    y = max(th + pad, y)
+
+    # Step the label downward until it clears everything already drawn. Bounded
+    # so a dense crowd degrades to overlapping labels rather than an infinite
+    # loop or labels marching off the bottom of the frame.
+    step = th + pad + 2
+    for _ in range(8):
+        rect = (x, y - th - pad, x + tw + pad, y)
+        if not any(_overlaps(rect, o) for o in occupied):
+            return x, y
+        if y + step > frame_h:
+            break
+        y += step
+    return x, y
+
+
+def _overlaps(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
+    return not (a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1])
+
+
 def draw_overlay(
     frame: np.ndarray,
     tracks: list[TrackState],
@@ -49,7 +91,11 @@ def draw_overlay(
     # Centreline: the reference that bearing is measured against.
     cv2.line(out, (w // 2, 0), (w // 2, h), (60, 60, 60), 1)
 
-    for t in tracks:
+    # Draw the target last so its label wins any remaining contest for space.
+    ordered = sorted(tracks, key=lambda t: t.track_id == target_id)
+    occupied: list[tuple[int, int, int, int]] = []
+
+    for t in ordered:
         if t.track_id == target_id:
             colour = _TARGET_COLOUR
         elif t.confirmed:
@@ -61,13 +107,18 @@ def draw_overlay(
         cv2.rectangle(out, (x1, y1), (x2, y2), colour, 2)
 
         label = format_label(t)
-        # Filled strip behind the text so it stays readable over a busy scene.
         (tw, th), _ = cv2.getTextSize(label, _FONT, 0.45, 1)
-        ly = max(th + 4, y1 - 4)
-        cv2.rectangle(out, (x1, ly - th - 4), (x1 + tw + 4, ly), colour, -1)
+        lx, ly = place_label(x1, y1 - 4, tw, th, w, h, occupied)
+        occupied.append((lx, ly - th - 4, lx + tw + 4, ly))
+
+        # Filled strip behind the text so it stays readable over a busy scene.
+        cv2.rectangle(out, (lx, ly - th - 4), (lx + tw + 4, ly), colour, -1)
         cv2.putText(
-            out, label, (x1 + 2, ly - 3), _FONT, 0.45, (0, 0, 0), 1, cv2.LINE_AA
+            out, label, (lx + 2, ly - 3), _FONT, 0.45, (0, 0, 0), 1, cv2.LINE_AA
         )
+        # Tie the label back to its box when displacement moved it away.
+        if abs(lx - x1) > 2 or abs(ly - (y1 - 4)) > 2:
+            cv2.line(out, (lx, ly), (x1, y1), colour, 1)
 
     status = (
         f"turn={command.turn:+.2f} drive={command.drive:+.2f} "
