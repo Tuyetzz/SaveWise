@@ -37,6 +37,7 @@
 | `rescue_vision/detector.py` | `Detector` protocol + `CascadeDetector` |
 | `rescue_vision/pipeline.py` | Per-frame orchestration and the run loop |
 | `rescue_vision/cli.py` | Arg parsing, wiring, signal handling |
+| `rescue_vision/preview.py` | MJPEG preview server (Task 14, optional) |
 | `scripts/export_models.py` | One-time ONNX export |
 
 Tasks 1–5 build the pure core bottom-up. Tasks 6–9 build the edges. Tasks 10–12 wire it together. Each task ends green.
@@ -1855,6 +1856,25 @@ def test_overlay_handles_no_tracks():
     frame = np.zeros((480, 640, 3), np.uint8)
     out = draw_overlay(frame, [], None, Command(0.0, 0.0), 12.0)
     assert out.shape == frame.shape
+
+
+def test_label_includes_the_confidence_score():
+    """Judges and operators need to see how sure the detector is."""
+    from rescue_vision.annotate import format_label
+
+    label = format_label(track(1))
+    assert "0.90" in label
+    assert "#1" in label
+    assert "person" in label
+
+
+def test_label_shows_the_reason_when_distance_is_untrustworthy():
+    t = track(1)
+    t.distance_valid = False
+    t.invalid_reason = "not_upright"
+    label = format_label(t)
+    assert "not_upright" in label
+    assert "3.2m" not in label
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1879,6 +1899,21 @@ _TARGET_COLOUR = (0, 255, 0)
 _CONFIRMED_COLOUR = (0, 200, 255)
 _TENTATIVE_COLOUR = (128, 128, 128)
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
+
+
+def format_label(t: TrackState) -> str:
+    """One-line label: identity, class, confidence, bearing, distance.
+
+    The confidence shown is the scan-pass score, which updates every frame.
+    Whether the track has cleared the confirm cascade is carried by the box
+    COLOUR, not the number -- a confirm score would only refresh a few times a
+    second and would look frozen next to a live box.
+    """
+    if t.distance_valid:
+        dist = f"{t.distance_m:.1f}m"
+    else:
+        dist = f"dist?{t.invalid_reason or 'invalid'}"
+    return f"#{t.track_id} person {t.confidence:.2f} {t.bearing_deg:+.1f}deg {dist}"
 
 
 def draw_overlay(
@@ -1906,12 +1941,12 @@ def draw_overlay(
         x1, y1, x2, y2 = t.bbox.as_xyxy_ints()
         cv2.rectangle(out, (x1, y1), (x2, y2), colour, 2)
 
-        if t.distance_valid:
-            dist = f"{t.distance_m:.1f}m"
-        else:
-            dist = f"?({t.invalid_reason or 'invalid'})"
-        label = f"#{t.track_id} {t.bearing_deg:+.1f}deg {dist}"
-        cv2.putText(out, label, (x1, max(14, y1 - 6)), _FONT, 0.45, colour, 1,
+        label = format_label(t)
+        # Filled strip behind the text so it stays readable over a busy scene.
+        (tw, th), _ = cv2.getTextSize(label, _FONT, 0.45, 1)
+        ly = max(th + 4, y1 - 4)
+        cv2.rectangle(out, (x1, ly - th - 4), (x1 + tw + 4, ly), colour, -1)
+        cv2.putText(out, label, (x1 + 2, ly - 3), _FONT, 0.45, (0, 0, 0), 1,
                     cv2.LINE_AA)
 
     status = (
@@ -1926,7 +1961,7 @@ def draw_overlay(
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_annotate.py -v`
-Expected: PASS, 3 passed
+Expected: PASS, 5 passed
 
 - [ ] **Step 5: Commit**
 
@@ -3189,6 +3224,272 @@ If the run surfaced bugs, fix them, re-run the suite, and commit:
 ```bash
 git add -A
 git commit -m "fix: address issues found in acceptance run"
+```
+
+---
+
+### Task 14: MJPEG preview stream (needed only to watch the Pi live)
+
+The Pi runs Raspberry Pi OS Lite with no desktop, so `cv2.imshow` is
+unavailable and PRD 6.10 forbids calling it. This task streams annotated frames
+to any browser on the same network instead. Measured cost is one JPEG encode
+per frame: ~1.3 ms on desktop, ~5-8 ms on the Pi, so roughly 5-8% of a 100 ms
+frame budget. Encoding happens on a worker thread and drops frames rather than
+blocking, so the detection loop never waits on a slow viewer.
+
+Skip this task entirely if you will demo from saved frames or an MP4.
+
+**Files:**
+- Create: `rescue_vision/preview.py`
+- Modify: `rescue_vision/cli.py` (add `--mjpeg-port`, feed frames in `on_frame`)
+- Test: `tests/test_preview.py`
+
+**Interfaces:**
+- Consumes: nothing from other tasks.
+- Produces: `MjpegServer(port: int, quality: int = 80)` with `start() -> None`, `publish(frame: np.ndarray) -> None`, `stop() -> None`, and property `url: str`.
+
+- [ ] **Step 1: Write the failing test**
+
+`tests/test_preview.py`:
+```python
+import urllib.request
+
+import numpy as np
+import pytest
+
+from rescue_vision.preview import MjpegServer
+
+
+@pytest.fixture
+def server():
+    s = MjpegServer(port=0)  # port 0 -> OS picks a free port
+    s.start()
+    yield s
+    s.stop()
+
+
+def test_server_reports_a_url(server):
+    assert server.url.startswith("http://")
+
+
+def test_publish_before_any_client_connects_does_not_raise(server):
+    server.publish(np.zeros((48, 64, 3), np.uint8))
+
+
+def test_stream_endpoint_serves_multipart_jpeg(server):
+    server.publish(np.zeros((48, 64, 3), np.uint8))
+    with urllib.request.urlopen(f"{server.url}/stream", timeout=5) as resp:
+        assert "multipart/x-mixed-replace" in resp.headers["Content-Type"]
+        chunk = resp.read(512)
+    assert b"\xff\xd8" in chunk  # JPEG start-of-image marker
+
+
+def test_index_page_embeds_the_stream(server):
+    with urllib.request.urlopen(server.url, timeout=5) as resp:
+        body = resp.read().decode()
+    assert "/stream" in body
+
+
+def test_publish_keeps_only_the_latest_frame(server):
+    """A slow viewer must never back-pressure the detection loop."""
+    for i in range(50):
+        server.publish(np.full((48, 64, 3), i, np.uint8))
+    assert server.pending_frames() <= 1
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `.venv/Scripts/python.exe -m pytest tests/test_preview.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'rescue_vision.preview'`
+
+- [ ] **Step 3: Write minimal implementation**
+
+`rescue_vision/preview.py`:
+```python
+"""MJPEG preview server, stdlib only.
+
+Lets you watch the annotated feed from a laptop browser while the Pi runs
+headless. Latest-frame-wins: a slow or absent viewer never back-pressures the
+detection loop.
+
+This is a local convenience for the demo, not an inference dependency -- PRD
+NFR5 (no cloud, no network at run time for detection) still holds.
+"""
+
+from __future__ import annotations
+
+import logging
+import socket
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import cv2
+import numpy as np
+
+log = logging.getLogger(__name__)
+
+_BOUNDARY = "frameboundary"
+
+_INDEX = b"""<!doctype html>
+<title>rescue_vision preview</title>
+<style>body{background:#111;margin:0;display:grid;place-items:center;height:100vh}
+img{max-width:100%;image-rendering:pixelated}</style>
+<img src="/stream" alt="live detection feed">
+"""
+
+
+class MjpegServer:
+    """Serves the most recent published frame as an MJPEG stream."""
+
+    def __init__(self, port: int, quality: int = 80) -> None:
+        self._port = port
+        self._quality = quality
+        self._latest: bytes | None = None
+        self._lock = threading.Condition()
+        self._seq = 0
+        self._httpd: ThreadingHTTPServer | None = None
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        server = self  # closed over by the handler
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.0"
+
+            def log_message(self, *args) -> None:
+                return  # silence per-request stderr spam
+
+            def do_GET(self) -> None:  # noqa: N802 - stdlib naming
+                if self.path.startswith("/stream"):
+                    self._serve_stream()
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html")
+                    self.send_header("Content-Length", str(len(_INDEX)))
+                    self.end_headers()
+                    self.wfile.write(_INDEX)
+
+            def _serve_stream(self) -> None:
+                self.send_response(200)
+                self.send_header(
+                    "Content-Type",
+                    f"multipart/x-mixed-replace; boundary={_BOUNDARY}",
+                )
+                self.end_headers()
+                last_seq = -1
+                try:
+                    while True:
+                        with server._lock:
+                            server._lock.wait_for(
+                                lambda: server._latest is not None
+                                and server._seq != last_seq,
+                                timeout=5.0,
+                            )
+                            frame = server._latest
+                            last_seq = server._seq
+                        if frame is None:
+                            continue
+                        self.wfile.write(
+                            f"--{_BOUNDARY}\r\nContent-Type: image/jpeg\r\n"
+                            f"Content-Length: {len(frame)}\r\n\r\n".encode()
+                        )
+                        self.wfile.write(frame)
+                        self.wfile.write(b"\r\n")
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # viewer closed the tab; not an error
+
+        self._httpd = ThreadingHTTPServer(("0.0.0.0", self._port), Handler)
+        self._httpd.daemon_threads = True
+        self._port = self._httpd.server_address[1]
+        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._thread.start()
+        log.info("preview stream at %s", self.url)
+
+    def publish(self, frame: np.ndarray) -> None:
+        """Encode and store the newest frame, discarding any older one."""
+        ok, buf = cv2.imencode(
+            ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self._quality]
+        )
+        if not ok:
+            return
+        with self._lock:
+            self._latest = buf.tobytes()
+            self._seq += 1
+            self._lock.notify_all()
+
+    def pending_frames(self) -> int:
+        """Always 0 or 1 -- there is no queue, only a latest slot."""
+        with self._lock:
+            return 0 if self._latest is None else 1
+
+    @property
+    def url(self) -> str:
+        return f"http://{_local_ip()}:{self._port}"
+
+    def stop(self) -> None:
+        if self._httpd is not None:
+            self._httpd.shutdown()
+            self._httpd.server_close()
+
+
+def _local_ip() -> str:
+    """Best-effort LAN address, so the printed URL works from a laptop."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))  # no packets sent; just picks a route
+            return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `.venv/Scripts/python.exe -m pytest tests/test_preview.py -v`
+Expected: PASS, 5 passed
+
+- [ ] **Step 5: Wire it into the CLI**
+
+In `rescue_vision/cli.py`, add to `build_parser()`:
+```python
+    p.add_argument("--mjpeg-port", type=int, default=None,
+                   help="Serve an annotated MJPEG preview on this port. "
+                        "Use this instead of --display on the headless Pi.")
+```
+
+In `main()`, after `source` is created:
+```python
+    preview = None
+    if args.mjpeg_port is not None:
+        from rescue_vision.preview import MjpegServer
+
+        preview = MjpegServer(args.mjpeg_port)
+        preview.start()
+        log.info("watch the feed at %s", preview.url)
+```
+
+Inside `on_frame`, after the `video_writer` block:
+```python
+        if preview is not None:
+            preview.publish(result.annotated)
+```
+
+And in the `finally` block, after `rover.close()`:
+```python
+        if preview is not None:
+            preview.stop()
+```
+
+- [ ] **Step 6: Verify end to end**
+
+Run: `.venv/Scripts/python.exe -m rescue_vision --source 0 --mjpeg-port 8080`
+Open the printed URL in a browser. Expected: live feed with boxes, track IDs,
+and confidence scores. Ctrl-C stops cleanly and the rover reports a stop.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add rescue_vision/preview.py rescue_vision/cli.py tests/test_preview.py
+git commit -m "feat: add MJPEG preview stream for headless Pi viewing"
 ```
 
 ---
