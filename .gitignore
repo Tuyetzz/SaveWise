@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Model weights and exports — auto-downloaded / regenerated, never commit
+*.pt
+*.onnx
+*.tflite
+*_ncnn_model/
+
+# Runtime output
+detections/
+*.jsonl
+*.mp4
+!tests/fixtures/*.mp4
+
+# OS
+Thumbs.db
+.DS_Store
