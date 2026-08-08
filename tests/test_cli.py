@@ -62,6 +62,22 @@ def test_scan_imgsz_is_tunable():
     assert config_from_args(args).scan_imgsz == 320
 
 
+def test_q_and_escape_quit_the_live_display():
+    """A webcam stream never ends, so the operator needs a way out."""
+    from rescue_vision.cli import should_quit
+
+    assert should_quit(ord("q")) is True
+    assert should_quit(ord("Q")) is True
+    assert should_quit(27) is True
+
+
+def test_other_keys_do_not_quit():
+    from rescue_vision.cli import should_quit
+
+    assert should_quit(255) is False  # waitKey's "nothing pressed", masked
+    assert should_quit(ord("a")) is False
+
+
 def test_defaults_are_left_untouched_when_no_overrides_are_given():
     from rescue_vision.config import Config
 

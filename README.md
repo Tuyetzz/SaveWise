@@ -16,17 +16,24 @@ python -m venv .venv
 
 Model weights download automatically on first run. Nothing to fetch by hand.
 
-## Run
+## Demo on Windows
 
-Webcam, console motor backend (nothing physically moves):
+```
+demo.bat            live webcam
+demo.bat clip       the bundled 3-person test clip
+demo.bat my.mp4     any video file
+```
+
+Press **q** or **Esc** in the preview window to quit. Nothing physically moves —
+the console motor backend just logs what it *would* command.
+
+The launcher passes `--confirm-min-interval 0.5`, which roughly doubles FPS for
+a smoother live picture. Drop it for maximum detection precision.
+
+Equivalent long form:
 
 ```
 .venv\Scripts\python.exe -m rescue_vision --source 0 --display
-```
-
-Recorded clip, writing an annotated MP4:
-
-```
 .venv\Scripts\python.exe -m rescue_vision --source clip.mp4 --save-video out.mp4
 ```
 

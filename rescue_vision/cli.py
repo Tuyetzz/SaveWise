@@ -17,6 +17,15 @@ from rescue_vision.rover import ConsoleRover, GpioZeroRover
 log = logging.getLogger(__name__)
 
 
+class QuitRequested(Exception):
+    """Raised from the display callback when the operator presses q or Esc."""
+
+
+def should_quit(key: int) -> bool:
+    """True for 'q', 'Q', or Esc. -1 is waitKey's 'no key pressed'."""
+    return key in (ord("q"), ord("Q"), 27)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="rescue_vision",
@@ -165,12 +174,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.display:
             import cv2
 
-            cv2.imshow("rescue_vision", result.annotated)
-            cv2.waitKey(1)
+            cv2.imshow("rescue_vision  [q or Esc to quit]", result.annotated)
+            if should_quit(cv2.waitKey(1) & 0xFF):
+                raise QuitRequested
 
     try:
         count = pipeline.run(source, max_frames=args.max_frames, on_frame=on_frame)
         log.info("processed %d frames", count)
+        return 0
+    except QuitRequested:
+        log.info("quit requested")
         return 0
     except KeyboardInterrupt:
         log.info("interrupted")
