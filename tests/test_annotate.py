@@ -1,7 +1,7 @@
 import numpy as np
 
 from rescue_vision.annotate import draw_overlay, format_label, place_label
-from rescue_vision.types import BBox, Command, TrackState
+from rescue_vision.types import BBox, TrackState
 
 
 def track(track_id=1, confirmed=True):
@@ -19,7 +19,7 @@ def track(track_id=1, confirmed=True):
 
 def test_overlay_returns_a_new_array_and_leaves_the_input_untouched():
     frame = np.zeros((480, 640, 3), np.uint8)
-    out = draw_overlay(frame, [track()], 1, Command(-0.31, 0.0), 12.0)
+    out = draw_overlay(frame, [track()], 12.0)
     assert out.shape == frame.shape
     assert not np.array_equal(out, frame)
     assert frame.sum() == 0
@@ -37,14 +37,14 @@ def test_overlay_draws_something_for_each_track():
         confirmed=True,
         display_confidence=0.8,
     )
-    one = draw_overlay(frame, [track(1)], 1, Command(0.0, 0.0), 12.0)
-    two = draw_overlay(frame, [track(1), second], 1, Command(0.0, 0.0), 12.0)
+    one = draw_overlay(frame, [track(1)], 12.0)
+    two = draw_overlay(frame, [track(1), second], 12.0)
     assert two.sum() > one.sum()
 
 
 def test_overlay_handles_no_tracks():
     frame = np.zeros((480, 640, 3), np.uint8)
-    out = draw_overlay(frame, [], None, Command(0.0, 0.0), 12.0)
+    out = draw_overlay(frame, [], 12.0)
     assert out.shape == frame.shape
 
 
@@ -53,7 +53,7 @@ def test_overlay_handles_a_box_at_the_very_top_of_frame():
     frame = np.zeros((480, 640, 3), np.uint8)
     t = track()
     t.bbox = BBox(10.0, 0.0, 80.0, 200.0)
-    out = draw_overlay(frame, [t], 1, Command(0.0, 0.0), 12.0)
+    out = draw_overlay(frame, [t], 12.0)
     assert out.shape == frame.shape
 
 
@@ -102,7 +102,7 @@ def test_three_crowded_people_all_get_distinct_label_rows():
         t = track(i + 1)
         t.bbox = BBox(100.0 + i * 20, 150.0, 180.0 + i * 20, 400.0)
         crowd.append(t)
-    out = draw_overlay(frame, crowd, 1, Command(0.0, 0.0), 12.0)
+    out = draw_overlay(frame, crowd, 12.0)
     assert out.shape == frame.shape
 
 

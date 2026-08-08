@@ -5,7 +5,10 @@ REM   demo.bat            live webcam
 REM   demo.bat clip       the bundled 3-person test clip
 REM   demo.bat <path>     any video file
 REM
-REM Press q or Esc in the preview window to quit.
+REM Press q or Esc in the preview window to quit. A journey summary prints on
+REM exit, and output\sightings.jsonl holds one record per person seen.
+REM
+REM Nothing here can move the rover -- it drives itself. This only observes.
 REM
 REM --confirm-min-interval 0.5 roughly doubles FPS versus the PRD default by
 REM rate-limiting the expensive confirm tier. Better for a live demo; drop the
@@ -29,6 +32,6 @@ echo Running rescue_vision on source: %SOURCE%
 echo Press q or Esc in the preview window to quit.
 echo.
 
-"%PY%" -m rescue_vision --source %SOURCE% --display --confirm-min-interval 0.5 --no-save-frames
+"%PY%" -m rescue_vision --source %SOURCE% --display --confirm-min-interval 0.5
 
 endlocal

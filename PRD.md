@@ -33,6 +33,21 @@ Read this section first — several v1 decisions changed and one contradiction w
 
 ---
 
+## 0c. Changelog (v2.1 → v3) — the subsystem no longer steers
+
+| # | Change | Why |
+|---|---|---|
+| C14 | **The rover drives itself.** Straight lines, turning left when its own front sensor detects a blockage. This subsystem never commands motion. | Steering the rover toward a detected person proved too difficult to control in practice. |
+| C15 | **Turn control, target selection and motor control are removed** — §6.8 and §6.9 are void. `control.py`, `selection.py` and `rover.py` are deleted, along with `KP`, `DEADBAND_DEG`, `MIN_TURN`, `TARGET_HOLD`, `SEARCH_HOLD`, `STOP_DISTANCE_M`, `APPROACH_SPEED` and `WATCHDOG_TIMEOUT`. | Nothing consumes them. This also removes the repo's riskiest code: the never-executed `GpioZeroRover`. |
+| C16 | **The deliverable is a journey log**, schema `rescue.sighting.v1` — one record per person encountered, not one per frame. §6.4's per-frame `rescue.detection.v1` becomes an opt-in debug log at `v2`, minus the command fields. | At 10 FPS, driving past one person for 5 s wrote ~50 near-identical rows. The unit a reader cares about is the person. |
+| C17 | **One saved image per sighting**, the highest-confidence frame. Frame rate-limiting and the output disk cap are deleted. | Retires §9's *"saved detection frames — unbounded, this is the one that bites"*, the largest risk to the 16 GB card. Three people means three JPEGs. |
+| C18 | **There is no target.** Every confirmed person is recorded equally. | Target selection existed only to decide where to steer. |
+
+**New coverage limitation, inherent to this design:** with a fixed 53.5°
+forward camera and no scanning, anyone outside that forward cone is never seen.
+Coverage is now a property of the rover's path, not of the vision system. Say
+this out loud in the demo before a judge asks.
+
 ## 1. Overview
 
 A camera-based subsystem mounted on an autonomously moving rover. The
@@ -760,37 +775,29 @@ MIN_BBOX_HEIGHT_PX     = 40
 MIN_ASPECT_RATIO       = 1.2     # h/w below this -> not upright
 DISTANCE_RANGE_M       = (0.3, 30.0)
 
-# --- Control ---
-DEADBAND_DEG          = 5.0
-KP                    = 0.02
-MIN_TURN              = 0.25     # motor stiction floor
-TARGET_HOLD           = 1.0      # target stickiness, seconds
-SEARCH_HOLD           = 0.7      # keep turning after target loss, seconds
-STOP_DISTANCE_M       = 1.5
-APPROACH_SPEED        = 0.3
-
-# --- Safety ---
-WATCHDOG_TIMEOUT      = 0.5      # seconds
+# --- Control / Safety ---
+# REMOVED IN v3 (C15). The rover drives itself, so nothing in this subsystem
+# can command motion. DEADBAND_DEG, KP, MIN_TURN, TARGET_HOLD, SEARCH_HOLD,
+# STOP_DISTANCE_M, APPROACH_SPEED and WATCHDOG_TIMEOUT are all gone.
 
 # --- Output ---
-SAVE_FRAMES           = True
-FRAME_SAVE_INTERVAL   = 1.0      # max 1 frame per track per second
-MAX_OUTPUT_DIR_MB     = 500
+SAVE_FRAMES           = True     # one best frame per sighting
+JPEG_QUALITY          = 90
+CONFIDENCE_SAMPLE_INTERVAL = 1.0 # display only; the log stays per-frame
+# FRAME_SAVE_INTERVAL and MAX_OUTPUT_DIR_MB removed in v3 (C17): saving one
+# image per sighting bounds disk by people seen rather than frames run.
 ```
 
 ## Appendix B: Sign Conventions
 
-Worth one table, because mixing these up is the most common way this
-subsystem fails in a way that looks like something else.
+One quantity survives v3. `turn_command` and `drive_command` were removed with
+the control layer (C15) — this subsystem no longer commands the rover.
 
 | Quantity | Negative | Positive |
 |---|---|---|
 | `bearing_deg` | Person is **left** of frame centre | Person is **right** of frame centre |
-| `turn_command` | Rover rotates **counter-clockwise / left** | Rover rotates **clockwise / right** |
-| `drive_command` | Reverse | Forward |
 
-A correctly wired system has `turn_command` taking the **same sign** as
-`bearing_deg` — person on the right, turn right. If your rover consistently
-turns away from people, swap the motor pin pairs in `MOTOR_PINS` rather
-than negating `KP`; that keeps the sign convention in this table true and
-saves the next person reading the code.
+Bearing is measured off the rover's heading **at the moment of the sighting**.
+With no odometry and no record of the rover's own turns, it cannot be converted
+into a position — the log says a person was seen 12° to the left 47 seconds in,
+not where that person was.

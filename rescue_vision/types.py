@@ -92,9 +92,43 @@ class TrackState:
     confidence_sampled_at: float | None = None
 
 
-@dataclass(frozen=True)
-class Command:
-    """Normalized rover command, both components in [-1, +1]."""
+@dataclass
+class Sighting:
+    """One person encountered during the journey.
 
-    turn: float
-    drive: float
+    Accumulates while the person is visible and is finalised when their track
+    disappears. The unit of the log is the sighting, not the frame: driving
+    past someone for five seconds is one record, not fifty.
+
+    Deliberately a "sighting" and not a "person". If tracking drops and
+    re-acquires the same individual they produce two records. That is visible
+    and interpretable in the log; a merge heuristic that silently fused two
+    different people would not be.
+
+    All times are seconds since journey start. Without odometry the log cannot
+    say *where* someone was, only *when* and at what angle off the rover's
+    heading at that moment.
+    """
+
+    sighting_id: int
+    track_id: int
+    first_seen_s: float
+    last_seen_s: float
+    frames_seen: int = 0
+    peak_confidence: float = 0.0
+    peak_confidence_at_s: float = 0.0
+    bearing_at_peak_deg: float = 0.0
+    confidence_sum: float = 0.0
+    bearing_min_deg: float = 0.0
+    bearing_max_deg: float = 0.0
+    closest_distance_m: float | None = None
+    distance_valid_frames: int = 0
+    best_frame_path: str | None = None
+
+    @property
+    def duration_s(self) -> float:
+        return self.last_seen_s - self.first_seen_s
+
+    @property
+    def mean_confidence(self) -> float:
+        return self.confidence_sum / self.frames_seen if self.frames_seen else 0.0

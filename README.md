@@ -1,11 +1,18 @@
 # Rescue Rover Vision Subsystem
 
-Person detection, bearing, coarse distance, and a normalized turn command for
-an autonomous rescue rover. Implements `PRD.md` v2.1.
+Logs every human seen during an autonomous rover's journey, with confidence
+scores. Implements `PRD.md` v3.
 
-Answers *"is there a person, and which way should I turn to face them?"* It does
-not answer *"where should I go next?"* — path planning and obstacle avoidance
-are out of scope.
+The rover drives itself — straight lines, turning left when its own front
+sensor finds a blockage. **This subsystem never steers it.** It watches and
+records: who was seen, when, how confident the detector was, and one saved image
+of each person's best moment.
+
+Answers *"who did the rover pass, and how sure are we?"*
+
+> **Coverage limitation, by design.** The camera is fixed forward with a 53.5°
+> field of view and never scans. Anyone outside that cone as the rover drives
+> past is never seen. Coverage is a property of the route, not of the vision.
 
 ## Setup (Windows dev)
 
@@ -33,25 +40,50 @@ In **cmd.exe** the bare name works:
 demo.bat clip
 ```
 
-Press **q** or **Esc** in the preview window to quit. Nothing physically moves —
-the console motor backend just logs what it *would* command.
+Press **q** or **Esc** in the preview window to quit. Nothing physically moves;
+there is no flag in this program that can command the rover.
 
 The launcher passes `--confirm-min-interval 0.5`, which roughly doubles FPS for
 a smoother live picture. Drop it for maximum detection precision.
-
-Equivalent long form:
-
-```
-.venv\Scripts\python.exe -m rescue_vision --source 0 --display
-.venv\Scripts\python.exe -m rescue_vision --source clip.mp4 --save-video out.mp4
-```
 
 If you use conda, ignore the active `(base)` environment — `demo.bat` calls
 `.venv\Scripts\python.exe` by absolute path, so it always uses the project venv
 regardless of what conda has activated.
 
-Output lands in `output/`: `events.jsonl` (schema `rescue.detection.v1`) and
-`detections/` frames.
+## The journey log
+
+A summary prints on exit:
+
+```
+JOURNEY COMPLETE - 3 human sighting(s)
+
+    #    seen at      for  peak conf   bearing   nearest
+  ---  ---------  -------  ---------  --------  --------
+    1       2.0s     2.5s       0.90     +3.4d      4.7m
+    2       2.5s     2.2s       0.89    -23.1d      5.3m
+    3       3.7s     1.9s       0.86     -4.8d      5.2m
+```
+
+`output/` then contains:
+
+- **`sightings.jsonl`** — one `rescue.sighting.v1` record per person
+  encountered, with first/last seen, duration, peak and mean confidence,
+  bearing range and closest trustworthy distance.
+- **`sightings/`** — exactly one JPEG per sighting: that person's
+  highest-confidence frame.
+
+**One record per person, not per frame.** Driving past someone for five seconds
+at 10 FPS is one row, not fifty. Add `--raw-log` to also write per-frame
+`rescue.detection.v2` rows to `events.jsonl` when you need to debug why someone
+was missed.
+
+**"Sighting", not "person", is deliberate.** If tracking drops and re-acquires
+the same individual they appear twice — visible in the log as two entries
+seconds apart at similar bearings. No merge heuristic, because a wrong merge of
+two different people would be invisible.
+
+**There is no position.** Without odometry the log records *when* someone was
+seen and at what angle off the rover's heading at that moment — never where.
 
 ## Tests
 
@@ -68,33 +100,35 @@ All tests run without a camera, a model, or motors.
 3. Set up the Pi per PRD §6.6 — a `--system-site-packages` venv, and `lap`
    installed explicitly (Ultralytics otherwise downloads it at the first
    `track()` call, which fails offline).
-4. Bench-test **with the wheels off the ground**:
+4. Run it:
 
 ```
-python -m rescue_vision --source picamera --rover gpiozero \
-    --scan-model yolo26n.onnx --confirm-model yolo26s.onnx --mjpeg-port 8080
+python -m rescue_vision --source picamera \
+    --scan-model yolo26n.onnx --confirm-model yolo26s.onnx \
+    --confirm-min-interval 0.5 --mjpeg-port 8080
 ```
 
 Never pass `--display` on the headless Pi — use `--mjpeg-port` and open the
 printed URL from a laptop on the same network.
 
-> `GpioZeroRover` and `PiCameraSource` are written from the spec and have
-> **never been run against hardware**. Expect the gpiochip number and the pin
-> mapping in `rescue_vision/rover.py` to need adjustment on first boot.
+No motor wiring, no bench test, no wheels-off-the-ground step: this program
+cannot move anything. The rover's own driving logic is a separate concern.
+
+> `PiCameraSource` is written from the spec and has **never been run against
+> hardware** — it is the one remaining unverified module. Expect the picamera2
+> configuration in `rescue_vision/frame_source.py` to need adjustment on first
+> boot.
 
 ## Architecture
 
-A pure decision core with impure edges:
-
 ```
-FrameSource ──> Detector ──> geometry → tracking → selection → control ──> RoverController
- file/cam/pi    cascade                     │                               console/gpiozero
-                                            └──> EventWriter (JSONL + frames)
+FrameSource ──> Detector ──> geometry → tracking ──> SightingRecorder
+ file/cam/pi    cascade                                journey log + best frames
 ```
 
-`geometry`, `tracking`, `selection`, and `control` perform no I/O and never read
-a clock — time is passed in. That is what makes the sign conventions and the
-controller testable on a laptop instead of on the floor at the demo.
+`geometry` and `tracking` perform no I/O and never read a clock — time is
+passed in. That is what lets the bearing conventions and the sighting
+accumulation be tested on a laptop with no camera and no model.
 
 ## Camera module vs laptop webcam
 
@@ -123,26 +157,23 @@ If detections are sparse on the camera module:
 and try a longer exposure at lower gain than PRD §6.6 suggests — see the
 measured caveat there.
 
-## Sign conventions
+## Sign convention
 
 | Quantity | Negative | Positive |
 |---|---|---|
 | `bearing_deg` | Person is **left** of centre | Person is **right** of centre |
-| `turn_command` | Rover rotates **counter-clockwise / left** | Rover rotates **clockwise / right** |
-| `drive_command` | Reverse | Forward |
 
-`turn_command` takes the **same sign** as `bearing_deg`. If the rover turns away
-from people, swap the motor pin pairs in `MOTOR_PINS` — do not negate `kp`, which
-would leave this table lying to the next reader.
+Measured off the rover's heading at the moment of the sighting. With no
+odometry it cannot be turned into a position.
 
 ## Tuning on the day
 
-Tunables are in `rescue_vision/config.py`; the ones you will actually touch are
+Tunables live in `rescue_vision/config.py`; the ones you will actually touch are
 exposed as CLI flags:
 
-- `--kp` — proportional gain. Carpet and hard floor differ enough to matter.
-- `--deadband-deg` — widen if the rover hunts around centre.
-- `--min-turn` — raise if the motors buzz without turning.
+- `--scan-conf 0.15` — recover recall on a noisy camera module.
+- `--confirm-min-interval 0.5` — the main FPS lever.
+- `--raw-log` — per-frame rows, for diagnosing a missed person.
 
 ### FPS
 

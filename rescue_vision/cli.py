@@ -1,4 +1,8 @@
-"""Command-line entry point. Wires the two swappable ends of the pipe."""
+"""Command-line entry point.
+
+The rover drives itself. This program only watches and records: there is no
+flag here that can move anything.
+"""
 
 from __future__ import annotations
 
@@ -9,10 +13,10 @@ import sys
 from pathlib import Path
 
 from rescue_vision.config import Config
-from rescue_vision.events import EventWriter
 from rescue_vision.frame_source import create_frame_source
 from rescue_vision.pipeline import Pipeline
-from rescue_vision.rover import ConsoleRover, GpioZeroRover
+from rescue_vision.sightings import SightingRecorder
+from rescue_vision.types import Sighting
 
 log = logging.getLogger(__name__)
 
@@ -22,31 +26,25 @@ class QuitRequested(Exception):
 
 
 def should_quit(key: int) -> bool:
-    """True for 'q', 'Q', or Esc. -1 is waitKey's 'no key pressed'."""
+    """True for 'q', 'Q', or Esc."""
     return key in (ord("q"), ord("Q"), 27)
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="rescue_vision",
-        description="Person detection, bearing, and turn command for a rescue rover.",
+        description="Logs humans detected during a rover journey, with confidence.",
     )
     p.add_argument(
         "--source",
         required=True,
         help='Frame source: a video path, a webcam index ("0"), or "picamera".',
     )
-    p.add_argument(
-        "--rover",
-        choices=["console", "gpiozero"],
-        default="console",
-        help="Motor backend. Defaults to console so motors never move by accident.",
-    )
     p.add_argument("--scan-model", default=None, help="Override the scan model path.")
     p.add_argument(
         "--confirm-model", default=None, help="Override the confirm model path."
     )
-    p.add_argument("--output-dir", default="output", help="Where JSONL and frames go.")
+    p.add_argument("--output-dir", default="output", help="Where the journey log goes.")
     p.add_argument("--max-frames", type=int, default=None)
     p.add_argument(
         "--display",
@@ -61,10 +59,17 @@ def build_parser() -> argparse.ArgumentParser:
         "of --display on the headless Pi.",
     )
     p.add_argument("--save-video", default=None, help="Write an annotated MP4 here.")
-    p.add_argument("--no-save-frames", action="store_true")
-    p.add_argument("--kp", type=float, default=None)
-    p.add_argument("--deadband-deg", type=float, default=None)
-    p.add_argument("--min-turn", type=float, default=None)
+    p.add_argument(
+        "--no-save-frames",
+        action="store_true",
+        help="Skip the one best frame saved per sighting.",
+    )
+    p.add_argument(
+        "--raw-log",
+        action="store_true",
+        help="Also write per-frame detections to events.jsonl. Off by default: "
+        "the journey log is the deliverable, this is for debugging a miss.",
+    )
     p.add_argument(
         "--confirm-min-interval",
         type=float,
@@ -100,12 +105,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable the confirm tier entirely, leaning on N_CONFIRM over the "
         "scan model. Last-resort FPS measure.",
     )
-    p.add_argument(
-        "--stby-pin",
-        type=int,
-        default=None,
-        help="TB6612FNG standby pin. Omit for an L298N.",
-    )
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
@@ -116,12 +115,6 @@ def config_from_args(args: argparse.Namespace) -> Config:
         overrides["scan_model"] = args.scan_model
     if args.confirm_model:
         overrides["confirm_model"] = args.confirm_model
-    if args.kp is not None:
-        overrides["kp"] = args.kp
-    if args.deadband_deg is not None:
-        overrides["deadband_deg"] = args.deadband_deg
-    if args.min_turn is not None:
-        overrides["min_turn"] = args.min_turn
     if args.no_save_frames:
         overrides["save_frames"] = False
     if args.confirm_min_interval is not None:
@@ -139,6 +132,37 @@ def config_from_args(args: argparse.Namespace) -> Config:
     return dataclasses.replace(Config(), **overrides)
 
 
+def format_summary(sightings: list[Sighting]) -> str:
+    """The end-of-journey report -- what you would actually show a judge."""
+    if not sightings:
+        return "\nJOURNEY COMPLETE - no humans detected.\n"
+
+    lines = [
+        "",
+        f"JOURNEY COMPLETE - {len(sightings)} human sighting(s)",
+        "",
+        f"  {'#':>3}  {'seen at':>9}  {'for':>7}  {'peak conf':>9}  "
+        f"{'bearing':>8}  {'nearest':>8}",
+        f"  {'-' * 3}  {'-' * 9}  {'-' * 7}  {'-' * 9}  {'-' * 8}  {'-' * 8}",
+    ]
+    for s in sightings:
+        dist = (
+            f"{s.closest_distance_m:.1f}m" if s.closest_distance_m is not None else "  --"
+        )
+        lines.append(
+            f"  {s.sighting_id:>3}  {s.first_seen_s:>8.1f}s  {s.duration_s:>6.1f}s  "
+            f"{s.peak_confidence:>9.2f}  {s.bearing_at_peak_deg:>+7.1f}d  {dist:>8}"
+        )
+    lines += [
+        "",
+        "  Times are seconds from journey start; bearing is degrees off the",
+        "  rover's heading at that moment (negative = left). Without odometry",
+        "  the log records when a person was seen, not where they were.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(
@@ -146,14 +170,7 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
     cfg = config_from_args(args)
-
     out = Path(args.output_dir)
-    writer = EventWriter(out / "events.jsonl", out / "detections", cfg)
-
-    if args.rover == "gpiozero":
-        rover = GpioZeroRover(cfg, stby_pin=args.stby_pin)
-    else:
-        rover = ConsoleRover(cfg)
 
     source = create_frame_source(args.source, cfg)
 
@@ -161,7 +178,15 @@ def main(argv: list[str] | None = None) -> int:
     from rescue_vision.detector import CascadeDetector
 
     detector = CascadeDetector(cfg)
-    pipeline = Pipeline(detector, rover, writer, cfg)
+    recorder = SightingRecorder(cfg, out)
+
+    raw_writer = None
+    if args.raw_log:
+        from rescue_vision.events import RawEventWriter
+
+        raw_writer = RawEventWriter(out / "events.jsonl", cfg)
+
+    pipeline = Pipeline(detector, recorder, cfg, raw_writer)
 
     preview = None
     if args.mjpeg_port is not None:
@@ -207,10 +232,13 @@ def main(argv: list[str] | None = None) -> int:
         log.info("interrupted")
         return 130
     finally:
-        # Order matters: motors first, always.
-        rover.close()
+        # pipeline.run already closed the recorder in its own finally, so the
+        # summary below reflects every sighting including any still open when
+        # the journey ended.
+        print(format_summary(recorder.summary()))
         source.close()
-        writer.close()
+        if raw_writer is not None:
+            raw_writer.close()
         if preview is not None:
             preview.stop()
         if video_writer is not None:

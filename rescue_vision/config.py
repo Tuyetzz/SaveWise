@@ -46,20 +46,10 @@ class Config:
     distance_max_m: float = 30.0
     edge_margin_px: float = 2.0
 
-    # --- Control ---
-    deadband_deg: float = 5.0
-    kp: float = 0.02
-    min_turn: float = 0.25  # motor stiction floor
-    target_hold: float = 1.0
-    search_hold: float = 0.7
-    stop_distance_m: float = 1.5
-    approach_speed: float = 0.3
-
-    # --- Safety ---
-    watchdog_timeout: float = 0.5
-
     # --- Output ---
-    save_frames: bool = True
-    frame_save_interval: float = 1.0
-    max_output_dir_mb: int = 500
+    # The rover drives itself (straight lines, left turn on blockage from its
+    # own front sensor), so this subsystem observes and logs only. There are no
+    # control, motor, or safety constants: nothing here can move anything.
+    save_frames: bool = True  # one best frame per sighting
+    jpeg_quality: int = 90
     confidence_sample_interval: float = 1.0  # display only; logs stay per-frame

@@ -2,112 +2,97 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Current state
+## What this is
 
-**There is no code yet.** The repository contains only `PRD.md` (the full spec, v2) and
-`hardware/camera_module.jpg`. It is not a git repository.
+A person-detection subsystem for an autonomous rescue rover, implementing `PRD.md` v3.
 
-`PRD.md` is the source of truth for design decisions. Read §6 before implementing anything;
-read §0 (changelog) to know which v1 decisions were reversed. When a design question comes up
-that the PRD already answers, follow the PRD rather than re-deciding — several of its choices
-exist specifically to avoid known failure modes, and the reasoning is recorded inline.
+**The rover drives itself** — straight lines, turning left when its own front sensor finds a
+blockage. This codebase never steers it and cannot move anything. It observes and records:
+who was seen during the journey, when, with what confidence, plus one saved image per person.
 
-Open questions the PRD has *not* resolved are listed in §10 (demo lighting, motor pin
-assignments, L298N vs TB6612FNG, chassis turning characteristics for `KP`). Ask rather than
-guess on those.
+This changed in v3 (PRD §0c). Earlier versions computed a turn command to orient the rover
+toward a detected person; that proved too hard to control, so `control.py`, `selection.py` and
+`rover.py` were deleted. If you find a reference to `Command`, `RoverController`, `KP`, or
+`is_target`, it is stale — remove it.
 
-## What is being built
-
-A person-detection subsystem for an autonomous rescue rover: camera → detect → track → compute
-bearing + coarse distance → emit a turn command that orients the rover toward the person. Path
-planning, obstacle avoidance, and localization are explicitly out of scope (§5).
-
-## Architecture
-
-The whole design hinges on one idea: **the detection/control core is byte-for-byte identical
-between the Windows dev machine and the Pi 5.** Only the two ends of the pipe swap out, via two
-interfaces:
-
-- `FrameSource` — `cv2.VideoCapture("clip.mp4")` on Windows, `picamera2` on the Pi.
-- `RoverController` (ABC, §6.9) — `ConsoleRover` (logs to stdout/JSONL, the default) on
-  Windows, `GpioZeroRover` on the Pi. `GpioZeroRover` must import `gpiozero` **lazily** so the
-  module still imports on Windows.
-
-Both are selected by CLI flag. Never let platform conditionals leak into the detection,
-tracking, bearing, distance, or control code.
-
-Pipeline stages, in order (§6.5, §6.7, §6.8):
-
-1. **Scan pass** — `YOLO26n` @ 480 px, conf 0.25, every frame. Also feeds the tracker.
-2. **Tracking** — ByteTrack (`model.track(..., persist=True, tracker="bytetrack.yaml")`)
-   applied to the *scan* pass. Track IDs are the unit of alerting — one alert per new confirmed
-   track, never one per frame.
-3. **Confirm pass** — `YOLO26s` @ 640 px, conf 0.45, only when scan returned ≥1 person, rate-
-   limited to once per `CONFIRM_MIN_INTERVAL`. A track is promoted to "confirmed human" after
-   `N_CONFIRM` confirm hits.
-4. **Bearing + distance** — `tan`-based bearing (not the linear approximation), pinhole
-   distance from bbox height, EMA-smoothed per track ID.
-5. **Target selection + P-control** — one target per frame, sticky for `TARGET_HOLD`;
-   proportional turn with deadband and a `MIN_TURN` stiction floor.
-
-Output is newline-delimited JSON, one object per detection per frame, schema
-`rescue.detection.v1` (§6.4). Every row repeats `turn_command`/`drive_command` so a consumer
-reading a single line has everything it needs.
-
-All tunables live in one config module — see Appendix A of the PRD for the full list and
-starting values. Don't scatter magic numbers into the pipeline.
+`PRD.md` is the source of truth. Read §0/§0b/§0c (changelogs) first: several decisions were
+reversed, and each reversal records why.
 
 ## Commands
 
-Nothing to build or test yet. When the Pi environment is set up (§6.6):
-
 ```bash
-sudo apt install -y python3-picamera2 python3-opencv libcamera-apps python3-venv
-python3 -m venv --system-site-packages venv   # --system-site-packages is REQUIRED
-source venv/bin/activate
-pip install ultralytics ncnn gpiozero lgpio   # no --break-system-packages inside a venv
-libcamera-hello --list-cameras                # verify camera
+.venv/Scripts/python.exe -m pytest -q                    # full suite, no hardware needed
+.venv/Scripts/python.exe -m pytest tests/test_geometry.py -v
+.venv/Scripts/python.exe -m pytest tests/test_sightings.py::test_peak_confidence_is_the_maximum_not_the_last_value -v
 ```
 
-Do **not** `pip install picamera2` or `opencv-python-headless` — apt provides both, and the
-venv sees them via `--system-site-packages`. The PyPI `picamera2` build routinely fails on the
-Pi.
-
-One-time model export (the only step needing internet):
-
-```python
-from ultralytics import YOLO
-YOLO("yolo26n.pt").export(format="ncnn", imgsz=480, half=True)
-YOLO("yolo26s.pt").export(format="ncnn", imgsz=640, half=True)
+```powershell
+.\demo.bat            # live webcam  (PowerShell needs the .\ prefix)
+.\demo.bat clip       # bundled 3-person fixture
 ```
 
-## Constraints that bite
+Always invoke `.venv/Scripts/python.exe` explicitly — a conda `(base)` environment is usually
+active and lacks every dependency.
 
-- **`RPi.GPIO` and `pigpio` do not work on Pi 5** (RP1 southbridge). Use `gpiozero` backed by
-  `lgpio`. Verify the gpiochip number with `ls /dev/gpiochip*` — it has moved between kernel
-  releases.
-- **YOLO26 is NMS-free**, so the `iou=` threshold does nothing. Tune recall/precision with
-  `conf=` only.
-- **Disk, not RAM, is the binding constraint** — 16 GB SD card, and `ultralytics` pulls in
-  PyTorch (~1.5–2.5 GB on arm64) even when NCNN does the inference. Saved detection frames are
-  the unbounded item: rate-limit to 1 per track per second, cap the output dir at ~500 MB. Run
-  `df -h` after each phase, target ≥2 GB free.
-- **Sign conventions** (Appendix B): negative `bearing_deg` = person left of centre; positive
-  `turn_command` = rover rotates clockwise/right. A correct system has `turn_command` taking the
-  *same* sign as `bearing_deg`. If the rover turns away from people, swap the motor pin pairs in
-  `MOTOR_PINS` — do not negate `KP`, that leaves the convention lying to the next reader.
-- **Motors default to stopped.** `stop()` on `KeyboardInterrupt`, on any uncaught exception, and
-  in a `finally`. A watchdog thread stops the drive if `drive()` hasn't been called within
-  `WATCHDOG_TIMEOUT`. Bench-test with wheels off the ground, every time.
-- **A single failed frame must not crash the pipeline** — log and continue (NFR4).
-- **Headless Pi** — never call `cv2.imshow` on the Pi path.
-- **Fixed short exposure is a requirement, not polish.** The OV5647 is rolling-shutter;
-  auto-exposure indoors picks 20–30 ms and smears a turning rover's frames. Disable `AeEnable`,
-  set `ExposureTime`, raise `AnalogueGain`.
-- Camera intrinsics (`HFOV_DEG = 53.5`) are for Camera Module v1 / OV5647. A v2/v3 module
-  changes them and every bearing and distance silently goes wrong.
-- `distance_m` is ±25–30% at best and invalid in the cases tabulated in §6.7 — notably a low
-  bbox aspect ratio, which means the person is lying down. Lying-down people are the actual
-  rescue target, so never gate an *alert* on distance; gate only the approach behaviour.
-- Confidence values differ between `.pt` on Windows and NCNN on the Pi. Tune `conf` coarsely on
-  the clip, re-check on the Pi.
+## Architecture
+
+```
+FrameSource ──> Detector ──> geometry → tracking ──> SightingRecorder
+ file/cam/pi    cascade                               journey log + best frames
+```
+
+Two ideas carry the design:
+
+**The core is pure.** `geometry.py` and `tracking.py` do no I/O and never call `time.time()` —
+the clock is a parameter. That is what makes bearing signs and sighting accumulation testable
+with no camera and no model. Keep it that way; if you need time in the core, pass it in.
+
+**The pipeline depends on a `Detector` Protocol, not on Ultralytics.** `ScriptedDetector` in
+`detector.py` replays canned detections, so `test_pipeline_smoke.py` exercises the whole loop
+offline. Any new pipeline stage must stay reachable from that test.
+
+**Detection is a two-tier cascade** (PRD §6.5): `yolo26n` @480 px every frame feeding ByteTrack,
+plus `yolo26s` @640 px on candidate frames only, rate-limited. A track is promoted to
+"confirmed human" after `N_CONFIRM` confirm hits and only confirmed tracks reach the log.
+
+## Output contract
+
+- `output/sightings.jsonl` — `rescue.sighting.v1`, **one record per person encountered**, not
+  per frame. Written when a track disappears; `close()` finalises anyone still visible.
+- `output/sightings/` — exactly one JPEG per sighting, the peak-confidence frame.
+- `output/events.jsonl` — `rescue.detection.v2` per-frame rows, only with `--raw-log`.
+
+Do not reintroduce per-frame logging as a default. Driving past one person for five seconds at
+10 FPS produced ~50 near-identical rows; collapsing that was the point of v3.
+
+## Things that will bite
+
+- **Retention ≠ visibility.** `TrackStore.tracks()` includes tracks the detector has stopped
+  reporting (kept so ByteTrack can re-associate IDs). Anything that logs or displays must use
+  `visible_tracks(frame_index)`. Getting this wrong previously fabricated 42 detection rows for
+  a person who had left the frame.
+- **Two confidence fields.** `confidence` is live per-frame and goes to logs; `display_confidence`
+  is sampled at 1 Hz and goes on-screen, because a number redrawn at 10 Hz is unreadable.
+- **`distance_m` is null when `distance_valid` is false.** A prone person fails the aspect-ratio
+  check — and prone people are the actual rescue target. Never gate anything on a rejected estimate.
+- **YOLO26 is NMS-free**, so `iou=` does nothing. Tune with `conf=` only.
+- **`lap` must be installed explicitly.** Ultralytics AutoUpdates it over the network at the
+  first `track()` call, which fails on an offline Pi — and fails late, at the first tracked frame.
+- **`RPi.GPIO` and `pigpio` do not work on Pi 5.** Irrelevant now that motor code is gone, but
+  do not reintroduce them.
+- **Never call `cv2.imshow` on the Pi** (headless). Use `--mjpeg-port`.
+- **Sensor noise, not resolution, limits detection** on the camera module: gain noise costs ~36%
+  of detections, blur 13–16%, resolution almost nothing. PRD §6.6 carries the measurements and a
+  flagged caveat that its short-exposure/high-gain trade may be tuned the wrong way.
+
+## Unverified code
+
+`PiCameraSource` in `frame_source.py` is written from the spec and **has never been executed** —
+`picamera2` cannot be imported on Windows. Its import is lazy so the package still loads. Expect
+it to need fixing on first Pi boot, and do not describe it as working.
+
+## Sign convention
+
+Negative `bearing_deg` = person left of centre. Measured off the rover's heading at the moment
+of the sighting; with no odometry it cannot be converted into a position. The log says *when*
+someone was seen and at what angle — never *where*.

@@ -10,11 +10,10 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from rescue_vision.types import Command, TrackState
+from rescue_vision.types import TrackState
 
-_TARGET_COLOUR = (0, 255, 0)  # green: the selected target
-_CONFIRMED_COLOUR = (0, 200, 255)  # amber: confirmed human, not the target
-_TENTATIVE_COLOUR = (128, 128, 128)  # grey: seen, not yet confirmed
+_CONFIRMED_COLOUR = (0, 255, 0)  # green: confirmed human, recorded as a sighting
+_TENTATIVE_COLOUR = (128, 128, 128)  # grey: seen, not yet through the cascade
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
@@ -79,28 +78,26 @@ def _overlaps(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> boo
 def draw_overlay(
     frame: np.ndarray,
     tracks: list[TrackState],
-    target_id: int | None,
-    command: Command,
     fps: float,
+    sightings_count: int = 0,
 ) -> np.ndarray:
-    """Draw boxes, track IDs, confidence, bearing and distance. Returns a new image."""
+    """Draw a box and confidence score per person. Returns a new image.
+
+    There is no target: the rover drives its own route, so every confirmed
+    person is equally worth showing.
+    """
     out = frame.copy()
     h, w = out.shape[:2]
 
     # Centreline: the reference that bearing is measured against.
     cv2.line(out, (w // 2, 0), (w // 2, h), (60, 60, 60), 1)
 
-    # Draw the target last so its label wins any remaining contest for space.
-    ordered = sorted(tracks, key=lambda t: t.track_id == target_id)
+    # Confirmed people last, so their labels win any contest for space.
+    ordered = sorted(tracks, key=lambda t: t.confirmed)
     occupied: list[tuple[int, int, int, int]] = []
 
     for t in ordered:
-        if t.track_id == target_id:
-            colour = _TARGET_COLOUR
-        elif t.confirmed:
-            colour = _CONFIRMED_COLOUR
-        else:
-            colour = _TENTATIVE_COLOUR
+        colour = _CONFIRMED_COLOUR if t.confirmed else _TENTATIVE_COLOUR
 
         x1, y1, x2, y2 = t.bbox.as_xyxy_ints()
         cv2.rectangle(out, (x1, y1), (x2, y2), colour, 2)
@@ -119,9 +116,7 @@ def draw_overlay(
         if abs(lx - x1) > 2 or abs(ly - (y1 - 4)) > 2:
             cv2.line(out, (lx, ly), (x1, y1), colour, 1)
 
-    status = (
-        f"turn={command.turn:+.2f} drive={command.drive:+.2f} "
-        f"fps={fps:.1f} tracks={len(tracks)}"
-    )
+    people = sum(1 for t in tracks if t.confirmed)
+    status = f"fps={fps:.1f} people={people} sightings={sightings_count}"
     cv2.putText(out, status, (8, h - 10), _FONT, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
     return out
