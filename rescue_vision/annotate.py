@@ -19,20 +19,19 @@ _FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
 def format_label(t: TrackState) -> str:
-    """One-line label: identity, class, confidence, bearing, distance.
+    """The box label: confidence and nothing else.
 
-    The confidence shown is `display_confidence`, sampled once per second
-    (Amendment A). Whether the track has cleared the confirm cascade is carried
-    by the box COLOUR rather than the number.
+    Track ID, bearing, and distance are deliberately NOT drawn -- they crowd
+    the frame and none of them is what a viewer needs to read at a glance.
+    All three are still written to the JSONL every frame, including
+    `invalid_reason` when a distance estimate was rejected, so nothing is lost
+    for analysis; this is a display choice only.
+
+    The value is `display_confidence`, sampled once per second (Amendment A),
+    because a number redrawn at 10 Hz is unreadable. Whether the track has
+    cleared the confirm cascade is carried by the box COLOUR.
     """
-    if t.distance_valid:
-        dist = f"{t.distance_m:.1f}m"
-    else:
-        dist = f"dist?{t.invalid_reason or 'invalid'}"
-    return (
-        f"#{t.track_id} person {t.display_confidence:.2f} "
-        f"{t.bearing_deg:+.1f}deg {dist}"
-    )
+    return f"confidence_score = {t.display_confidence:.2f}"
 
 
 def place_label(

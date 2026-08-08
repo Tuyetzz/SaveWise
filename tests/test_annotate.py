@@ -106,12 +106,23 @@ def test_three_crowded_people_all_get_distinct_label_rows():
     assert out.shape == frame.shape
 
 
-def test_label_includes_the_confidence_score():
-    """Judges and operators need to see how sure the detector is."""
-    label = format_label(track(1))
-    assert "0.90" in label
-    assert "#1" in label
-    assert "person" in label
+def test_label_is_the_confidence_score_and_nothing_else():
+    """Judges need one number, not a data dump."""
+    assert format_label(track(1)) == "confidence_score = 0.90"
+
+
+def test_label_omits_track_id_bearing_and_distance():
+    """These stay in the JSONL; they are just not drawn on the frame."""
+    label = format_label(track(7))
+    for noise in ("#7", "person", "deg", "3.2m", "dist"):
+        assert noise not in label
+
+
+def test_label_omits_the_distance_rejection_reason():
+    t = track(1)
+    t.distance_valid = False
+    t.invalid_reason = "clipped_bottom"
+    assert format_label(t) == "confidence_score = 0.90"
 
 
 def test_label_uses_the_sampled_confidence_not_the_live_one():
@@ -121,12 +132,3 @@ def test_label_uses_the_sampled_confidence_not_the_live_one():
     t.display_confidence = 0.87
     assert "0.87" in format_label(t)
     assert "0.41" not in format_label(t)
-
-
-def test_label_shows_the_reason_when_distance_is_untrustworthy():
-    t = track(1)
-    t.distance_valid = False
-    t.invalid_reason = "not_upright"
-    label = format_label(t)
-    assert "not_upright" in label
-    assert "3.2m" not in label
