@@ -97,6 +97,20 @@ exposed as CLI flags:
 - `--deadband-deg` — widen if the rover hunts around centre.
 - `--min-turn` — raise if the motors buzz without turning.
 
-If FPS is short on the Pi, raise `confirm_min_interval` or drop the confirm tier
-before you shrink `scan_imgsz` — a smaller scan input is what starts costing you
-detections of distant and prone people.
+### FPS
+
+Measured end-to-end on an Intel Core Ultra 5 226V desktop with the `.pt`
+backend — a Pi 5 is roughly 4–6× slower:
+
+| Configuration | ms/frame | FPS |
+|---|---|---|
+| Default cascade (scan 480 + confirm 640 @ 0.15 s) | 108 | 9.2 |
+| `--confirm-min-interval 0.5` | 58 | 17.2 |
+| `--no-confirm` | 46 | 21.6 |
+| `--no-confirm --scan-imgsz 320` | 27 | 37.1 |
+
+The confirm tier is ~60% of the frame budget. **Expect to run the Pi with
+`--confirm-min-interval 0.5` at minimum** — the default configuration will not
+reach the PRD's 10 FPS target there. Raise that flag before you shrink
+`--scan-imgsz`: a smaller scan input is what starts costing you detections of
+distant and prone people, which is the failure you cannot recover from.

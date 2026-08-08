@@ -69,7 +69,10 @@ class Pipeline:
 
         self._tracks.prune(frame_index)
 
-        tracks = self._tracks.tracks()
+        # Only tracks seen on THIS frame may steer the rover, be drawn, or be
+        # logged. Retained-but-unseen tracks stay in the store purely so
+        # ByteTrack can re-associate their IDs.
+        tracks = self._tracks.visible_tracks(frame_index)
         target = self._selector.select(tracks, now)
         command = compute_command(target, self._cfg)
         self._rover.drive(turn=command.turn, forward=command.drive)

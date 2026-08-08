@@ -104,6 +104,27 @@ def test_prune_drops_tracks_unseen_for_longer_than_max_age():
     assert store.tracks() == []
 
 
+def test_visible_tracks_excludes_a_track_not_seen_this_frame():
+    """A track the detector stopped reporting must not be steered on or logged.
+
+    It stays in the store so ByteTrack can re-associate its ID and keep the
+    smoothed history, but it is no longer evidence that a person is there.
+    """
+    store = TrackStore(CFG)
+    store.update([det(300.0, 100.0, 360.0, 400.0, track_id=1)], 640, 480, 5, now=0.5)
+    assert [t.track_id for t in store.visible_tracks(5)] == [1]
+    assert store.visible_tracks(6) == []
+    assert len(store.tracks()) == 1  # still retained for re-association
+
+
+def test_visible_tracks_returns_a_track_seen_again_after_a_gap():
+    store = TrackStore(CFG)
+    store.update([det(300.0, 100.0, 360.0, 400.0, track_id=1)], 640, 480, 5, now=0.5)
+    assert store.visible_tracks(6) == []
+    store.update([det(300.0, 100.0, 360.0, 400.0, track_id=1)], 640, 480, 7, now=0.7)
+    assert [t.track_id for t in store.visible_tracks(7)] == [1]
+
+
 def test_prune_keeps_a_recently_seen_track():
     store = TrackStore(CFG)
     store.update([det(300.0, 100.0, 360.0, 400.0, track_id=1)], 640, 480, 10, now=0.0)

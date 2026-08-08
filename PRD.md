@@ -623,13 +623,33 @@ the floor that is how you lose a chassis.
 | **16 GB SD card runs out of space** — `ultralytics` pulls PyTorch (~1.5–2.5 GB on arm64) | Build breaks mid-hackathon. **Most likely failure mode.** | Budget explicitly (below). Cap saved frames. `df -h` at the end of every phase. |
 | Turn-direction sign inverted | Rover turns away from the person; looks exactly like a detection bug | Bench-test wheels-up before floor testing; label the chassis |
 | P-controller oscillation / hunting | Rover twitches, never settles; looks broken in the demo | Deadband + `MIN_TURN` + EMA smoothing (§6.7, §6.8) |
-| CPU-only inference too slow during sweeps | Missed detections | Drop scan input to 416 or 320 px first; then drop the confirm tier entirely |
+| CPU-only inference too slow during sweeps | Missed detections | **Raise `CONFIRM_MIN_INTERVAL` first** — measurements below show the confirm tier is ~60% of the frame budget. Shrink `SCAN_IMGSZ` only after that. (v1/v2 had this order backwards.) |
 | Motion blur from continuous rotation | Missed or low-confidence detections | Fixed short exposure + raised gain (§6.6) |
 | Distance estimate wildly wrong for lying-down people | Rover mis-judges approach — and lying-down people are the actual rescue target | `distance_valid = false` on low aspect ratio; never gate an *alert* on distance, only the approach behaviour |
 | Stock COCO model misses atypical poses | Lower real-world accuracy than benchmarks suggest | Test against lying/occluded/partially-visible poses during prep, not just standing people |
 | Tracker ID switches when people cross | Duplicate alerts, target flip-flop | `TARGET_HOLD` stickiness; accept ID switches as a known limitation at this scope |
 | Vision pipeline hangs while motors run | Rover drives into something | Watchdog (FR11) |
 | No accelerator hardware | Lower accuracy ceiling vs. NFR targets | Scope FPS/latency targets to CPU reality; accelerator is documented future work, not a blocker |
+
+**Measured throughput (2026-08-08).** End-to-end pipeline on an Intel Core
+Ultra 5 226V desktop, `.pt` backend, 640×480 clip, frame saving off:
+
+| Configuration | ms/frame | FPS |
+|---|---|---|
+| Cascade: scan 480 + confirm 640 @ 0.15 s (PRD default) | 108 | **9.2** |
+| Cascade with `CONFIRM_MIN_INTERVAL = 0.5` | 58 | 17.2 |
+| Scan tier only (confirm disabled) | 46 | 21.6 |
+| Scan only @ 320 px | 27 | 37.1 |
+
+**Read this as a warning.** The PRD default manages 9.2 FPS on a desktop CPU
+roughly 4–6× faster than a Pi 5. NFR2 asks for ≥10 FPS *on the Pi*, and the
+default configuration will not get there — expect ~2 FPS unmodified.
+
+The confirm tier is ~60% of the frame budget, so it is the first thing to trim,
+not the scan resolution. ONNX should recover some of the gap versus `.pt`, but
+plan on running with `--confirm-min-interval 0.5` or `--no-confirm` on the Pi
+and re-benchmarking there. These numbers are the desktop baseline to compare
+the Pi against, not a prediction of it.
 
 **Disk budget (16 GB card, Raspberry Pi OS Lite).** Check this in Phase 1,
 not on demo day:

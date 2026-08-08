@@ -112,7 +112,24 @@ class TrackStore:
         }
 
     def tracks(self) -> list[TrackState]:
+        """Every retained track, including ones not seen this frame.
+
+        Prefer `visible_tracks()` for anything that steers the rover or claims
+        a person is present.
+        """
         return list(self._tracks.values())
+
+    def visible_tracks(self, frame_index: int) -> list[TrackState]:
+        """Only tracks the detector reported on this very frame.
+
+        Retention and visibility are different questions. A track is retained
+        past its last sighting so ByteTrack can re-associate the same ID and
+        keep its smoothed history -- but a retained track is not evidence that
+        a person is still there. Steering or logging off a stale track means
+        commanding a turn toward someone who has already left the frame, and
+        writing detection rows for a bbox that holds nobody.
+        """
+        return [t for t in self._tracks.values() if t.last_seen_frame == frame_index]
 
     def confirmed_tracks(self) -> list[TrackState]:
         return [t for t in self._tracks.values() if t.confirmed]

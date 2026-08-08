@@ -120,6 +120,44 @@ def test_unconfirmed_tracks_are_not_written_to_the_log(tmp_path):
     assert (tmp_path / "events.jsonl").read_text().strip() == ""
 
 
+def test_a_vanished_person_stops_the_rover_and_stops_the_log(tmp_path):
+    """Found by the acceptance run: a track the detector stopped reporting used
+    to linger for track_max_age_frames, fabricating detection rows and holding
+    a turn command for ~3 s. PRD FR10 wants an explicit stop when nobody is
+    tracked."""
+    script = [[person_at(100.0)], [person_at(100.0)], [], [], []]
+    pipeline, rover, writer = build(tmp_path, script)
+    results = [pipeline.process_frame(FRAME, i) for i in range(5)]
+    writer.close()
+    rover.close()
+
+    assert results[1].target is not None
+    assert results[1].command.turn < 0.0
+
+    for r in results[2:]:
+        assert r.target is None
+        assert r.command.turn == 0.0
+        assert r.command.drive == 0.0
+        assert r.rows == []
+
+    logged = [
+        json.loads(line)
+        for line in (tmp_path / "events.jsonl").read_text().strip().splitlines()
+    ]
+    assert max(r["frame_index"] for r in logged) == 1
+
+
+def test_a_stale_track_is_not_drawn_on_the_annotated_frame(tmp_path):
+    """Drawing a box where nobody is looks like a detection bug to a judge."""
+    script = [[person_at(320.0)], []]
+    pipeline, rover, writer = build(tmp_path, script)
+    pipeline.process_frame(FRAME, 0)
+    second = pipeline.process_frame(FRAME, 1)
+    writer.close()
+    rover.close()
+    assert second.tracks == []
+
+
 def test_a_failing_frame_does_not_kill_the_run(tmp_path):
     """NFR4: log and continue."""
 

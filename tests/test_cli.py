@@ -45,6 +45,23 @@ def test_no_save_frames_flag_disables_frame_output():
     assert config_from_args(args).save_frames is False
 
 
+def test_confirm_interval_is_tunable_as_the_main_fps_lever():
+    args = build_parser().parse_args(["--source", "0", "--confirm-min-interval", "0.5"])
+    assert config_from_args(args).confirm_min_interval == 0.5
+
+
+def test_no_confirm_disables_the_confirm_tier():
+    import math
+
+    args = build_parser().parse_args(["--source", "0", "--no-confirm"])
+    assert math.isinf(config_from_args(args).confirm_min_interval)
+
+
+def test_scan_imgsz_is_tunable():
+    args = build_parser().parse_args(["--source", "0", "--scan-imgsz", "320"])
+    assert config_from_args(args).scan_imgsz == 320
+
+
 def test_defaults_are_left_untouched_when_no_overrides_are_given():
     from rescue_vision.config import Config
 

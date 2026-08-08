@@ -57,6 +57,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--deadband-deg", type=float, default=None)
     p.add_argument("--min-turn", type=float, default=None)
     p.add_argument(
+        "--confirm-min-interval",
+        type=float,
+        default=None,
+        help="Seconds between confirm passes. THE main FPS lever: the confirm "
+        "tier costs ~60%% of the frame budget, so raising this to 0.5 roughly "
+        "doubles throughput. Raise this before shrinking --scan-imgsz.",
+    )
+    p.add_argument(
+        "--scan-imgsz",
+        type=int,
+        default=None,
+        help="Scan-pass input size. Shrinking this costs real detections of "
+        "distant and prone people -- try --confirm-min-interval first.",
+    )
+    p.add_argument(
+        "--no-confirm",
+        action="store_true",
+        help="Disable the confirm tier entirely, leaning on N_CONFIRM over the "
+        "scan model. Last-resort FPS measure.",
+    )
+    p.add_argument(
         "--stby-pin",
         type=int,
         default=None,
@@ -80,6 +101,14 @@ def config_from_args(args: argparse.Namespace) -> Config:
         overrides["min_turn"] = args.min_turn
     if args.no_save_frames:
         overrides["save_frames"] = False
+    if args.confirm_min_interval is not None:
+        overrides["confirm_min_interval"] = args.confirm_min_interval
+    if args.scan_imgsz is not None:
+        overrides["scan_imgsz"] = args.scan_imgsz
+    if args.no_confirm:
+        # An interval no run will ever reach, so the escalation check always
+        # declines. Keeps one code path instead of a special case.
+        overrides["confirm_min_interval"] = float("inf")
     return dataclasses.replace(Config(), **overrides)
 
 
