@@ -13,7 +13,7 @@ venv/
 *_ncnn_model/
 
 # Runtime output
-detections/
+output/
 *.jsonl
 *.mp4
 !tests/fixtures/*.mp4

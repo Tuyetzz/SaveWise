@@ -236,6 +236,12 @@ def main(argv: list[str] | None = None) -> int:
         # summary below reflects every sighting including any still open when
         # the journey ended.
         print(format_summary(recorder.summary()))
+
+        from rescue_vision.report import build_report
+
+        report = build_report(recorder.summary(), out, recorder.journey_duration_s)
+        print(f"  Report: {report.resolve()}\n")
+
         source.close()
         if raw_writer is not None:
             raw_writer.close()
