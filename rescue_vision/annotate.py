@@ -10,27 +10,31 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from rescue_vision.palette import TENTATIVE_HEX, colour_for, hex_to_bgr
 from rescue_vision.types import TrackState
 
-_CONFIRMED_COLOUR = (0, 255, 0)  # green: confirmed human, recorded as a sighting
-_TENTATIVE_COLOUR = (128, 128, 128)  # grey: seen, not yet through the cascade
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
+_OUTLINE = (20, 20, 20)
 
 
-def format_label(t: TrackState) -> str:
-    """The box label: confidence and nothing else.
+def format_label(t: TrackState, sighting_id: int | None = None) -> str:
+    """`P2  confidence_score = 0.89`, or confidence alone before confirmation.
 
-    Track ID, bearing, and distance are deliberately NOT drawn -- they crowd
-    the frame and none of them is what a viewer needs to read at a glance.
-    All three are still written to the JSONL every frame, including
-    `invalid_reason` when a distance estimate was rejected, so nothing is lost
-    for analysis; this is a display choice only.
+    ASCII only: cv2's Hershey fonts render anything else (including a middle
+    dot) as '?'. The HTML report is free to use whatever it likes.
 
-    The value is `display_confidence`, sampled once per second (Amendment A),
-    because a number redrawn at 10 Hz is unreadable. Whether the track has
-    cleared the confirm cascade is carried by the box COLOUR.
+    The person number means identity is never carried by colour alone --
+    necessary past three people, where the palette can no longer separate them,
+    and for the ~1 in 12 men with a colour vision deficiency.
+
+    Bearing and distance are deliberately not drawn. They crowd the frame and
+    are not what a viewer reads at a glance; both still reach the sightings log.
+
+    The value is `display_confidence`, sampled once per second, because a
+    number redrawn at 10 Hz is unreadable.
     """
-    return f"confidence_score = {t.display_confidence:.2f}"
+    conf = f"confidence_score = {t.display_confidence:.2f}"
+    return f"P{sighting_id}  {conf}" if sighting_id is not None else conf
 
 
 def place_label(
@@ -80,12 +84,16 @@ def draw_overlay(
     tracks: list[TrackState],
     fps: float,
     sightings_count: int = 0,
+    sighting_ids: dict[int, int] | None = None,
 ) -> np.ndarray:
-    """Draw a box and confidence score per person. Returns a new image.
+    """One coloured box per person. Returns a new image.
 
-    There is no target: the rover drives its own route, so every confirmed
-    person is equally worth showing.
+    Grey means "seen but not yet confirmed"; a colour means "counted, and in
+    the report". Colour is keyed on sighting id so it stays with the same
+    person for the whole sweep -- only stable because a sighting now survives
+    brief detection dropouts.
     """
+    sighting_ids = sighting_ids or {}
     out = frame.copy()
     h, w = out.shape[:2]
 
@@ -97,17 +105,23 @@ def draw_overlay(
     occupied: list[tuple[int, int, int, int]] = []
 
     for t in ordered:
-        colour = _CONFIRMED_COLOUR if t.confirmed else _TENTATIVE_COLOUR
+        sid = sighting_ids.get(t.track_id) if t.confirmed else None
+        colour = hex_to_bgr(colour_for(sid) if sid is not None else TENTATIVE_HEX)
 
         x1, y1, x2, y2 = t.bbox.as_xyxy_ints()
+        # Dark outline first. The palette's contrast is measured against a
+        # controlled chart surface; ours is whatever the camera sees, so a blue
+        # box on a blue door would otherwise vanish.
+        cv2.rectangle(out, (x1 - 1, y1 - 1), (x2 + 1, y2 + 1), _OUTLINE, 4)
         cv2.rectangle(out, (x1, y1), (x2, y2), colour, 2)
 
-        label = format_label(t)
+        label = format_label(t, sid)
         (tw, th), _ = cv2.getTextSize(label, _FONT, 0.45, 1)
         lx, ly = place_label(x1, y1 - 4, tw, th, w, h, occupied)
         occupied.append((lx, ly - th - 4, lx + tw + 4, ly))
 
         # Filled strip behind the text so it stays readable over a busy scene.
+        cv2.rectangle(out, (lx - 1, ly - th - 5), (lx + tw + 5, ly + 1), _OUTLINE, -1)
         cv2.rectangle(out, (lx, ly - th - 4), (lx + tw + 4, ly), colour, -1)
         cv2.putText(
             out, label, (lx + 2, ly - 3), _FONT, 0.45, (0, 0, 0), 1, cv2.LINE_AA

@@ -60,14 +60,39 @@ class SightingRecorder:
         self._done: list[Sighting] = []
         self._next_id = 1
         self._last_seen_any = 0.0
+        self._peaked_this_frame: set[int] = set()
+
+    def sighting_id_for(self, track_id: int) -> int | None:
+        """The open sighting for this track, if it has one yet."""
+        s = self._open.get(track_id)
+        return s.sighting_id if s else None
+
+    @property
+    def people_found(self) -> int:
+        """Everyone counted so far, including anyone still in view.
+
+        The on-screen tally must include open sightings: showing 0 while two
+        people are boxed reads as broken, even though it is only counting
+        finalised records.
+        """
+        return self._next_id - 1
 
     def observe(
-        self, tracks: list[TrackState], annotated_frame: np.ndarray, now: float
+        self,
+        tracks: list[TrackState],
+        annotated_frame: np.ndarray | None,
+        now: float,
     ) -> None:
-        """Fold this frame's confirmed tracks into their open sightings."""
+        """Fold this frame's confirmed tracks into their open sightings.
+
+        `annotated_frame` may be None when the caller intends to supply the
+        overlay later via `attach_frame` -- the overlay cannot be drawn until
+        sighting ids exist, and this method is what assigns them.
+        """
         if self._start is None:
             self._start = now
         self._last_seen_any = now - self._start
+        self._peaked_this_frame = set()
         for t in tracks:
             if not t.confirmed:
                 continue
@@ -95,9 +120,7 @@ class SightingRecorder:
                 s.peak_confidence = t.confidence
                 s.peak_confidence_at_s = elapsed
                 s.bearing_at_peak_deg = t.bearing_deg
-                if self._cfg.save_frames:
-                    # Keep the best look at this person, not the latest one.
-                    self._best_frame[t.track_id] = annotated_frame.copy()
+                self._peaked_this_frame.add(t.track_id)
 
             # Only an estimate that passed the PRD 6.7 validity rules may
             # count. A prone person fails the aspect-ratio check, and prone
@@ -106,6 +129,23 @@ class SightingRecorder:
                 s.distance_valid_frames += 1
                 if s.closest_distance_m is None or t.distance_m < s.closest_distance_m:
                     s.closest_distance_m = t.distance_m
+
+        if annotated_frame is not None:
+            self.attach_frame(annotated_frame)
+
+    def attach_frame(self, annotated: np.ndarray) -> None:
+        """Store this frame as the best image for any track that just peaked.
+
+        Split out of `observe` because the overlay cannot be drawn until
+        sighting ids exist, and `observe` is what assigns them. The pipeline
+        therefore calls observe -> draw_overlay -> attach_frame. Callers that
+        already have the image (tests) can pass it straight to `observe`.
+        """
+        if not self._cfg.save_frames:
+            return
+        for track_id in self._peaked_this_frame:
+            if track_id in self._open:
+                self._best_frame[track_id] = annotated.copy()
 
     def finalise_absent(self, visible_track_ids: Iterable[int], now: float) -> None:
         """Close sightings whose track has been gone longer than the grace period.

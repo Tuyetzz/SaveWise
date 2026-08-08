@@ -82,23 +82,39 @@ def test_an_empty_journey_logs_nothing(tmp_path):
     assert sightings(tmp_path) == []
 
 
-def test_a_brief_detection_gap_does_not_close_a_sighting(tmp_path):
+def test_a_brief_detection_gap_does_not_split_one_person_in_two(tmp_path):
     """The person is still there; the detector just missed a frame."""
     script = [[person_at(320.0)], [], [person_at(320.0)], [person_at(320.0)]]
     pipeline, _, _ = build(tmp_path, script)
     results = [pipeline.process_frame(FRAME, i) for i in range(4)]
-    assert all(r.sightings_so_far == 0 for r in results)
-    assert sightings(tmp_path) == []
+    assert results[-1].people_found == 1  # one person, counted once
+    assert sightings(tmp_path) == []  # still in view, so not yet finalised
 
 
 def test_a_person_leaving_frame_closes_their_sighting_after_the_grace_period(tmp_path):
     cfg = Config(n_confirm=1, sighting_gap_s=0.25)  # FakeClock steps 0.1s
     script = [[person_at(320.0)], [person_at(320.0)], [], [], [], []]
     pipeline, _, _ = build(tmp_path, script, cfg=cfg)
-    results = [pipeline.process_frame(FRAME, i) for i in range(6)]
-    assert results[1].sightings_so_far == 0  # still visible
-    assert results[-1].sightings_so_far == 1  # gone long enough, record written
-    assert results[-1].tracks == []
+
+    pipeline.process_frame(FRAME, 0)
+    pipeline.process_frame(FRAME, 1)
+    assert sightings(tmp_path) == []  # visible, nothing finalised
+
+    pipeline.process_frame(FRAME, 2)
+    assert sightings(tmp_path) == []  # gone, but inside the grace window
+
+    for i in range(3, 6):
+        last = pipeline.process_frame(FRAME, i)
+    assert len(sightings(tmp_path)) == 1  # grace expired, record written
+    assert last.tracks == []
+    assert last.people_found == 1  # still one person, counted once
+
+
+def test_the_on_screen_tally_counts_people_still_in_view(tmp_path):
+    """Showing 0 while someone is boxed reads as broken to a viewer."""
+    pipeline, _, _ = build(tmp_path, [[person_at(200.0, 1), person_at(450.0, 2)]] * 2)
+    result = pipeline.process_frame(FRAME, 0)
+    assert result.people_found == 2
 
 
 def test_unconfirmed_tracks_never_reach_the_journey_log(tmp_path):

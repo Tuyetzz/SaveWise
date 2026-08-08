@@ -106,9 +106,57 @@ def test_three_crowded_people_all_get_distinct_label_rows():
     assert out.shape == frame.shape
 
 
-def test_label_is_the_confidence_score_and_nothing_else():
-    """Judges need one number, not a data dump."""
-    assert format_label(track(1)) == "confidence_score = 0.90"
+def test_label_carries_the_person_number_and_confidence():
+    assert format_label(track(1), sighting_id=2) == "P2  confidence_score = 0.90"
+
+
+def test_label_is_pure_ascii_because_hershey_fonts_cannot_render_more():
+    """cv2 renders a middle dot as '?'."""
+    assert format_label(track(1), sighting_id=2).isascii()
+
+
+def test_an_unconfirmed_track_has_no_person_number_yet():
+    assert format_label(track(1, confirmed=False), None) == "confidence_score = 0.90"
+
+
+def test_each_person_is_drawn_in_their_own_colour():
+    from rescue_vision.palette import colour_for, hex_to_bgr
+
+    frame = np.zeros((480, 640, 3), np.uint8)
+    a, b = track(1), track(2)
+    b.bbox = BBox(300.0, 50.0, 400.0, 350.0)
+    out = draw_overlay(frame, [a, b], 12.0, 2, {1: 1, 2: 2})
+
+    pixels = out.reshape(-1, 3)
+    for sid in (1, 2):
+        want = np.array(hex_to_bgr(colour_for(sid)))
+        assert (pixels == want).all(axis=1).any(), f"P{sid} colour missing"
+
+
+def test_a_persons_colour_does_not_change_when_someone_else_leaves():
+    """Colour follows the entity, never its rank."""
+    from rescue_vision.palette import colour_for, hex_to_bgr
+
+    frame = np.zeros((480, 640, 3), np.uint8)
+    second = track(2)
+    second.bbox = BBox(300.0, 50.0, 400.0, 350.0)
+
+    both = draw_overlay(frame, [track(1), second], 12.0, 2, {1: 1, 2: 2})
+    alone = draw_overlay(frame, [second], 12.0, 2, {2: 2})
+
+    want = np.array(hex_to_bgr(colour_for(2)))
+    for img in (both, alone):
+        assert (img.reshape(-1, 3) == want).all(axis=1).any()
+
+
+def test_an_unconfirmed_person_is_drawn_grey_not_coloured():
+    """Grey means 'not yet counted'; colour means 'in the report'."""
+    from rescue_vision.palette import hex_to_bgr, TENTATIVE_HEX
+
+    frame = np.zeros((480, 640, 3), np.uint8)
+    out = draw_overlay(frame, [track(1, confirmed=False)], 12.0, 0, {})
+    want = np.array(hex_to_bgr(TENTATIVE_HEX))
+    assert (out.reshape(-1, 3) == want).all(axis=1).any()
 
 
 def test_label_omits_track_id_bearing_and_distance():

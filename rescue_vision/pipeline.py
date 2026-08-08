@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 class FrameResult:
     frame_index: int
     tracks: list[TrackState]
-    sightings_so_far: int = 0
+    people_found: int = 0
     rows: list[dict] = field(default_factory=list)
     annotated: np.ndarray | None = None
 
@@ -71,12 +71,22 @@ class Pipeline:
         # one as present would log a person who has already left the frame.
         tracks = self._tracks.visible_tracks(frame_index)
 
+        # Order matters: observe() assigns sighting ids, draw_overlay() needs
+        # them to colour each person, and attach_frame() then stores the
+        # ANNOTATED image as that person's best shot. Drawing first would save
+        # bare frames with no boxes into the report.
+        self._recorder.observe(tracks, None, now)
+        sighting_ids = {
+            t.track_id: sid
+            for t in tracks
+            if (sid := self._recorder.sighting_id_for(t.track_id)) is not None
+        }
+
         self._update_fps(now)
         annotated = draw_overlay(
-            frame, tracks, self._fps, len(self._recorder.summary())
+            frame, tracks, self._fps, self._recorder.people_found, sighting_ids
         )
-
-        self._recorder.observe(tracks, annotated, now)
+        self._recorder.attach_frame(annotated)
         self._recorder.finalise_absent({t.track_id for t in tracks}, now)
 
         rows: list[dict] = []
@@ -88,7 +98,7 @@ class Pipeline:
         return FrameResult(
             frame_index=frame_index,
             tracks=tracks,
-            sightings_so_far=len(self._recorder.summary()),
+            people_found=self._recorder.people_found,
             rows=rows,
             annotated=annotated,
         )
