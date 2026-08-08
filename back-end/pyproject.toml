@@ -1,23 +1,32 @@
 [project]
 name = "back-end"
 version = "0.1.0"
-description = "Add your description here"
+description = "DisasterResponse Phase 1 — voice triage interview backend"
 readme = "README.md"
 authors = [
     { name = "Marcus Nguyen", email = "marcus@marcusnguyen.dev" }
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi[all,standard]>=0.141.1",
-    "pydantic-settings>=2.15.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "faster-whisper>=1.1",
+    "sqlmodel>=0.0.22",
+    "openai>=1.50",
+    "python-dotenv>=1.0",
+    "numpy>=1.26",
+    "nvidia-cublas-cu12",
+    "nvidia-cudnn-cu12>=9",
 ]
 
-[project.scripts]
-back-end = "back_end:main"
-
-[build-system]
-requires = ["uv_build>=0.12.3,<0.13.0"]
-build-backend = "uv_build"
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "websockets>=13",
+]
 
 [tool.uv]
 package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
