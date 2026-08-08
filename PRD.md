@@ -373,15 +373,22 @@ bearing_deg = ((cx / frame_width) - 0.5) * HFOV_DEG
 ```
 
 Negative = left of centre. This is a small-angle-friendly linear
-approximation; a `tan`-based version is more correct at the frame edges:
+approximation; a `tan`-based version is correct everywhere:
 
 ```
 f_px        = frame_width / (2 * tan(radians(HFOV_DEG) / 2))
 bearing_deg = degrees(atan((cx - frame_width / 2) / f_px))
 ```
 
-Use the `tan` version — it costs nothing and is right at the edges, which
-is exactly where a person first appears during a sweep.
+Use the `tan` version — it costs nothing and is right everywhere.
+
+Note the two forms agree **exactly** at the frame centre and at both edges;
+that is forced by construction, since the `tan` form is defined to return
+±HFOV/2 at the edges. They diverge in *between*, peaking near the middle of
+each half — about 0.8° at three-quarters across a 640 px frame with this HFOV.
+So the linear approximation's error is worst mid-frame, not at the edges as
+v1/v2 of this PRD implied. Verified by
+`tests/test_geometry.py::test_tan_and_linear_forms_agree_at_centre_and_edges`.
 
 **Distance** — pinhole model on bounding-box height:
 
