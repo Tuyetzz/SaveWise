@@ -20,6 +20,30 @@
 - Every commit message ends with the trailer: `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`
 - Never commit `*.pt`, `*.onnx`, `detections/`, or `*.jsonl` (already in `.gitignore`).
 
+## Amendment A: displayed confidence is sampled at 1 Hz
+
+Decided after the plan was first written. A confidence number redrawn at 10 Hz
+is unreadable and makes the demo look unstable, so the **displayed** value is
+sampled once per second and held between samples.
+
+The **logged** value stays per-frame. Logs are for analysis and must be precise;
+displays are for humans and must be legible. Do not conflate them.
+
+Concretely, this changes five places from what is written below:
+
+1. `config.py` gains `confidence_sample_interval: float = 1.0`.
+2. `TrackState` gains `display_confidence: float = 0.0` and
+   `confidence_sampled_at: float | None = None`.
+3. `TrackStore.update()` takes an extra `now: float` parameter — final
+   signature `update(detections, frame_w, frame_h, frame_index, now)` — and
+   refreshes `display_confidence` only when
+   `now - confidence_sampled_at >= cfg.confidence_sample_interval`.
+4. `annotate.format_label()` reads `t.display_confidence`, not `t.confidence`.
+5. `pipeline.process_frame()` passes its already-computed `now` into
+   `TrackStore.update()`.
+
+`build_event()` is unchanged: it keeps writing the live per-frame `confidence`.
+
 ## File Structure
 
 | File | Responsibility |
