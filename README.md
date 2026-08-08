@@ -18,10 +18,19 @@ Model weights download automatically on first run. Nothing to fetch by hand.
 
 ## Demo on Windows
 
+In **PowerShell** — note the leading `.\`, without which PowerShell will not run
+a script from the current directory:
+
+```powershell
+.\demo.bat            # live webcam
+.\demo.bat clip       # the bundled 3-person test clip
+.\demo.bat my.mp4     # any video file
 ```
-demo.bat            live webcam
-demo.bat clip       the bundled 3-person test clip
-demo.bat my.mp4     any video file
+
+In **cmd.exe** the bare name works:
+
+```
+demo.bat clip
 ```
 
 Press **q** or **Esc** in the preview window to quit. Nothing physically moves —
@@ -36,6 +45,10 @@ Equivalent long form:
 .venv\Scripts\python.exe -m rescue_vision --source 0 --display
 .venv\Scripts\python.exe -m rescue_vision --source clip.mp4 --save-video out.mp4
 ```
+
+If you use conda, ignore the active `(base)` environment — `demo.bat` calls
+`.venv\Scripts\python.exe` by absolute path, so it always uses the project venv
+regardless of what conda has activated.
 
 Output lands in `output/`: `events.jsonl` (schema `rescue.detection.v1`) and
 `detections/` frames.
