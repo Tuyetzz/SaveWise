@@ -13,7 +13,9 @@ venv/
 *_ncnn_model/
 
 # Runtime output
-output/
+# the pipeline generates inside it
+output/*
+!output/.gitkeep
 *.jsonl
 *.mp4
 !tests/fixtures/*.mp4
