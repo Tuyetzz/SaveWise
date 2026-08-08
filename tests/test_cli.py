@@ -62,6 +62,16 @@ def test_scan_imgsz_is_tunable():
     assert config_from_args(args).scan_imgsz == 320
 
 
+def test_confidence_floors_are_tunable_for_a_noisy_camera():
+    """Main recall lever when the camera module's gain noise costs detections."""
+    args = build_parser().parse_args(
+        ["--source", "0", "--scan-conf", "0.15", "--confirm-conf", "0.35"]
+    )
+    cfg = config_from_args(args)
+    assert cfg.scan_conf == 0.15
+    assert cfg.confirm_conf == 0.35
+
+
 def test_q_and_escape_quit_the_live_display():
     """A webcam stream never ends, so the operator needs a way out."""
     from rescue_vision.cli import should_quit

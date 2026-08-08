@@ -96,6 +96,33 @@ FrameSource ──> Detector ──> geometry → tracking → selection → con
 a clock — time is passed in. That is what makes the sign conventions and the
 controller testable on a laptop instead of on the floor at the demo.
 
+## Camera module vs laptop webcam
+
+Measured on 36 clip frames, `yolo26n` @480 px, against synthetic degradation:
+
+| Condition | Detections kept | Mean conf |
+|---|---|---|
+| Baseline | 100% | 0.72 |
+| Resolution quartered | 80% | 0.73 |
+| Darkness alone | 95–97% | 0.68–0.72 |
+| **Darkness + gain noise** | **64%** | 0.74 |
+| Motion blur | 84–87% | 0.63–0.75 |
+| Realistic Pi combination | 77% | 0.71 |
+
+Resolution barely matters. **Sensor noise from high analogue gain is the
+dominant cost** — bigger than darkness, blur, and resolution combined. What
+degrades is recall, not confidence, and tracking absorbs much of it since
+alerts fire per track rather than per frame.
+
+If detections are sparse on the camera module:
+
+```
+--scan-conf 0.15        recover recall; N_CONFIRM still guards precision
+```
+
+and try a longer exposure at lower gain than PRD §6.6 suggests — see the
+measured caveat there.
+
 ## Sign conventions
 
 | Quantity | Negative | Positive |

@@ -358,6 +358,33 @@ choose 20–30 ms, which smears a person into the background while the rover
 is turning. Fix the exposure short and raise gain to compensate; accept the
 extra sensor noise.
 
+> **Measured caveat — this trade may be tuned the wrong way (2026-08-08).**
+> Detection was measured on 36 clip frames with `yolo26n` @480 px, conf 0.25,
+> against synthetic degradations:
+>
+> | Degradation | Detections retained | Mean conf |
+> |---|---|---|
+> | Resolution quartered | 80% | 0.73 |
+> | Darkness alone (30–50%) | 95–97% | 0.68–0.72 |
+> | **Darkness + gain noise** | **64%** | 0.74 |
+> | Motion blur 9–15 px | 84–87% | 0.63–0.75 |
+> | Realistic Pi (dark+noise+blur) | 77% | 0.71 |
+>
+> Blur costs 13–16%. Gain noise costs 36%. So "short exposure, high gain"
+> buys a cheap fix for a *more expensive* problem. **Test both settings in the
+> real demo lighting** rather than accepting 4 ms / 4× as given — a longer
+> exposure at lower gain may well detect better even with visible smear.
+>
+> Also note resolution is a non-issue: the sensor has far more pixels than the
+> model consumes. And what degrades is *recall*, not confidence — surviving
+> detections stay around 0.71. Lower `SCAN_CONF` to ~0.15 to recover recall;
+> `N_CONFIRM` and the confirm tier still guard precision.
+>
+> Caveats on the method: blur was modelled as a linear horizontal smear, which
+> likely understates rolling-shutter skew during fast rotation, and Gaussian
+> noise is only an approximation of sensor noise. Trust the direction more than
+> the exact magnitudes.
+
 ### 6.7 Bearing & Distance Estimation
 
 **Camera intrinsics (Camera Module v1 / OV5647):** horizontal FOV

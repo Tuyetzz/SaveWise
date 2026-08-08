@@ -81,6 +81,20 @@ def build_parser() -> argparse.ArgumentParser:
         "distant and prone people -- try --confirm-min-interval first.",
     )
     p.add_argument(
+        "--scan-conf",
+        type=float,
+        default=None,
+        help="Scan-pass confidence floor (default 0.25). LOWER this to ~0.15 "
+        "on a noisy camera module: measured recall drops ~23%% under Pi-like "
+        "noise, and the confirm tier plus N_CONFIRM still guard precision.",
+    )
+    p.add_argument(
+        "--confirm-conf",
+        type=float,
+        default=None,
+        help="Confirm-pass confidence floor (default 0.45).",
+    )
+    p.add_argument(
         "--no-confirm",
         action="store_true",
         help="Disable the confirm tier entirely, leaning on N_CONFIRM over the "
@@ -114,6 +128,10 @@ def config_from_args(args: argparse.Namespace) -> Config:
         overrides["confirm_min_interval"] = args.confirm_min_interval
     if args.scan_imgsz is not None:
         overrides["scan_imgsz"] = args.scan_imgsz
+    if args.scan_conf is not None:
+        overrides["scan_conf"] = args.scan_conf
+    if args.confirm_conf is not None:
+        overrides["confirm_conf"] = args.confirm_conf
     if args.no_confirm:
         # An interval no run will ever reach, so the escalation check always
         # declines. Keeps one code path instead of a special case.
