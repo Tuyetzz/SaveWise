@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { wsBase } from "./triageDisplay";
 
 export const FIELD_ORDER = [
   "trapped",
@@ -139,8 +140,7 @@ function toPcm16(samples: Float32Array, fromRate: number): ArrayBuffer {
 
 export function defaultServerUrl(): string {
   if (typeof window === "undefined") return "";
-  const proto = window.location.protocol === "https:" ? "wss" : "ws";
-  return `${proto}://${window.location.hostname}:8000/ws/converse`;
+  return `${wsBase()}/api/ws/converse`;
 }
 
 export function useInterview() {

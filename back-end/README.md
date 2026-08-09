@@ -23,22 +23,26 @@ uv sync
 uv run dev
 ```
 
-Serves on `0.0.0.0:8000`. For TLS (phone access) run uvicorn directly:
+Serves on `127.0.0.1:8000` — loopback only. The nginx proxy at
+hackathon.marcusnguyen.dev is the sole public entry point: it terminates TLS
+(Let's Encrypt) and routes `/api/*` here, everything else to the frontend on
+:3308. Phones just use the domain; no certificate warnings, everything
+same-origin.
 
-```bash
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 \
-  --ssl-keyfile <key.pem> --ssl-certfile <cert.pem>
-```
+If you ever need direct LAN access without the proxy (old workflow), run
+uvicorn with `--host 0.0.0.0` and self-signed TLS, and accept the certificate
+warning at `https://<server-ip>:8000/api/health` on the phone first.
 
 No `--reload` — it reloads the Whisper model on every save. First start
 downloads distil-large-v3 (~1.5 GB) to `~/.cache/faster-whisper`.
 
-Before demo day: visit `https://<server-ip>:8000/health` on the phone once and
-accept the certificate warning, otherwise the `wss://` handshake fails opaquely.
-
 ## Protocol
 
-`/ws/converse`, one connection per interview. Client sends `{"t":"start"}`,
+All routes — HTTP and WebSocket — live under `/api`: the reverse proxy routes
+`/api/*` to this backend (port 8000) and everything else to the frontend
+(port 3308).
+
+`/api/ws/converse`, one connection per interview. Client sends `{"t":"start"}`,
 then one binary PCM16 16 kHz mono frame per complete utterance (client does the
 endpointing). Server replies per turn: `question` + binary PCM (24 kHz) +
 `question_end`, then after each answer `transcript`, `fields`. When the
@@ -46,7 +50,7 @@ interview ends (`complete` or `no_response`), a spoken `closing` + audio is
 sent first — confirming first responders are notified and coming — so the
 survivor always hears that the request was received.
 
-`/ws/dashboard`, any number of connections. Server pushes
+`/api/ws/dashboard`, any number of connections. Server pushes
 `{"t": "case_updated", "case_id": ...}` whenever an interview starts, an
 assessment lands, a status changes, or a responder acts. Payloads are pointers,
 not state — clients refetch, so the HTTP endpoints stay the source of truth.

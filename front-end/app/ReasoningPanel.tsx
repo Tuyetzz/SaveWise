@@ -163,7 +163,7 @@ export default function ReasoningPanel({
     let ws: WebSocket | null = null;
     let closed = false;
     const connect = () => {
-      ws = new WebSocket(`${wsBase()}/ws/dashboard`);
+      ws = new WebSocket(`${wsBase()}/api/ws/dashboard`);
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data);

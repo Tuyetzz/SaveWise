@@ -29,13 +29,23 @@ export const CAT: Record<
   },
 };
 
+// Behind the reverse proxy (hackathon.marcusnguyen.dev) the page is served
+// on the default port and nginx routes /api/* to the backend — same origin.
+// In local dev the page runs on :3000 and the backend on :8000.
+function behindProxy(): boolean {
+  const port = window.location.port;
+  return port === "" || port === "443" || port === "80";
+}
+
 export function apiBase(): string {
   if (typeof window === "undefined") return "";
+  if (behindProxy()) return "";
   return `${window.location.protocol}//${window.location.hostname}:8000`;
 }
 
 export function wsBase(): string {
   if (typeof window === "undefined") return "";
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  if (behindProxy()) return `${proto}//${window.location.host}`;
   return `${proto}//${window.location.hostname}:8000`;
 }

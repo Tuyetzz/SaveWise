@@ -12,7 +12,7 @@ from pathlib import Path
 import websockets
 
 ANSWER_DIR = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("tests/answers")
-URL = "ws://127.0.0.1:8000/ws/converse"
+URL = "ws://127.0.0.1:8000/api/ws/converse"
 SILENCE_2S = b"\x00" * (2 * 16000 * 2)
 
 

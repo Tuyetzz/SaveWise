@@ -47,10 +47,14 @@ async def lifespan(app: FastAPI):
 
 def run() -> None:
     """`uv run dev` entrypoint. No --reload: it would re-load the Whisper
-    model on every save."""
+    model on every save.
+
+    Loopback only: the nginx proxy at hackathon.marcusnguyen.dev is the sole
+    public entry point — the backend must not be reachable on :8000 from
+    outside the box."""
     import uvicorn
 
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000)
+    uvicorn.run("app.main:app", host="127.0.0.1", port=8000)
 
 
 app = FastAPI(lifespan=lifespan)
@@ -61,7 +65,10 @@ app.add_middleware(
 )
 
 
-@app.get("/health")
+# Every route (HTTP and WS) lives under /api — the reverse proxy at
+# hackathon.marcusnguyen.dev routes /api/* here and everything else to the
+# Next.js frontend.
+@app.get("/api/health")
 def health():
     return {"status": "ok"}
 
@@ -86,7 +93,7 @@ class DashboardHub:
 hub = DashboardHub()
 
 
-@app.websocket("/ws/dashboard")
+@app.websocket("/api/ws/dashboard")
 async def dashboard_ws(ws: WebSocket):
     await ws.accept()
     hub.clients.add(ws)
@@ -469,7 +476,7 @@ async def send_closing(ws: WebSocket, text: str) -> None:
         print(f"[tts] closing failed: {exc}")
 
 
-@app.websocket("/ws/converse")
+@app.websocket("/api/ws/converse")
 async def converse(ws: WebSocket):
     await ws.accept()
     interview_id = uuid.uuid4().hex[:8]
