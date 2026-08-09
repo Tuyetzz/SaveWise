@@ -1,0 +1,40 @@
+# Dev/demo environments: the Windows 11 laptop and the Linux server (running
+# next to the back-end, consuming the phone's relayed stream). The old note
+# about apt-installed opencv/picamera2 on the Pi is history — detection no
+# longer runs on the Pi at all; its camera never worked.
+
+[project]
+name = "detection-app"
+version = "0.1.0"
+description = "rescue_vision — logs humans seen during a rover journey, with confidence"
+requires-python = ">=3.10"
+dependencies = [
+    "ultralytics>=8.3.0",     # pulls in torch + torchvision (~2-3 GB)
+    "onnxruntime>=1.17",      # CPU inference for exported .onnx models
+    "opencv-python>=4.9",
+    "numpy>=1.26",
+    # ByteTrack's linear-assignment solver. Ultralytics does NOT declare this
+    # as a hard dependency — it AutoUpdates it over the network on the first
+    # .track() call, which breaks on an offline box, and breaks late (at the
+    # first tracked frame rather than at startup). Pin it.
+    "lap>=0.5.12",
+    # Synchronous WS client for --source ws://... (frames relayed from the
+    # phone on the rover via the backend).
+    "websocket-client>=1.7",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "rescue_vision"
+module-root = ""
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

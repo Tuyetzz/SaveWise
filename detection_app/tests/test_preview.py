@@ -43,3 +43,70 @@ def test_publish_keeps_only_the_latest_frame(server):
     for i in range(50):
         server.publish(np.full((48, 64, 3), i, np.uint8))
     assert server.pending_frames() <= 1
+
+
+# --- WsPublisher: annotated frames pushed to the backend relay ---
+
+
+class FakeWs:
+    def __init__(self):
+        self.frames = []
+        self.closed = False
+        self.fail_next_send = False
+
+    def send_binary(self, data):
+        if self.fail_next_send:
+            raise OSError("link down")
+        self.frames.append(data)
+
+    def close(self):
+        self.closed = True
+
+
+def test_publisher_sends_jpeg_frames():
+    from rescue_vision.preview import WsPublisher
+
+    ws = FakeWs()
+    pub = WsPublisher("ws://backend/annotated", connect=lambda: ws)
+    pub.publish(np.zeros((48, 64, 3), np.uint8), now=0.0)
+    assert pub.sent == 1
+    assert ws.frames[0].startswith(b"\xff\xd8")  # JPEG start-of-image
+
+
+def test_publisher_survives_backend_being_down_and_throttles_retries():
+    from rescue_vision.preview import WsPublisher
+
+    attempts = []
+
+    def connect():
+        attempts.append(1)
+        raise OSError("connection refused")
+
+    pub = WsPublisher("ws://backend/annotated", connect=connect)
+    frame = np.zeros((48, 64, 3), np.uint8)
+    pub.publish(frame, now=0.0)  # tries, fails
+    pub.publish(frame, now=1.0)  # inside the cooldown: no attempt
+    pub.publish(frame, now=4.0)  # cooldown over: tries again
+    assert len(attempts) == 2
+    assert pub.sent == 0
+
+
+def test_publisher_reconnects_after_a_send_failure():
+    from rescue_vision.preview import WsPublisher
+
+    sockets = []
+
+    def connect():
+        ws = FakeWs()
+        sockets.append(ws)
+        return ws
+
+    pub = WsPublisher("ws://backend/annotated", connect=connect)
+    frame = np.zeros((48, 64, 3), np.uint8)
+    pub.publish(frame, now=0.0)
+    sockets[0].fail_next_send = True
+    pub.publish(frame, now=1.0)  # send fails; socket dropped
+    assert sockets[0].closed
+    pub.publish(frame, now=10.0)  # past cooldown: new socket, delivers
+    assert len(sockets) == 2
+    assert pub.sent == 2

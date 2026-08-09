@@ -10,6 +10,8 @@ import {
   defaultServerUrl,
   useInterview,
 } from "../useInterview";
+import { useCameraUplink } from "../useRover";
+import CameraPanel from "./CameraPanel";
 
 const PHASE_INFO: Record<Phase, { label: string; dot: string }> = {
   idle: { label: "Ready", dot: "bg-zinc-500" },
@@ -57,6 +59,8 @@ export default function RoverConsole() {
     holdEnd,
   } = useInterview();
 
+  const camera = useCameraUplink();
+
   const [serverUrl, setServerUrl] = useState("");
   useEffect(() => setServerUrl(defaultServerUrl()), []);
 
@@ -81,6 +85,9 @@ export default function RoverConsole() {
       />
 
       <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4 p-4 md:flex-row">
+        {/* the phone on the rover is the camera; driving is on /control */}
+        <CameraPanel {...camera} />
+
         {/* conversation */}
         <section className="flex min-h-[50vh] flex-1 flex-col rounded-xl border border-zinc-800 bg-zinc-900/60">
           <div

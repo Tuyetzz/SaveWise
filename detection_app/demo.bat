@@ -19,8 +19,7 @@ set PY=%~dp0.venv\Scripts\python.exe
 
 if not exist "%PY%" (
     echo ERROR: .venv not found. Run this first:
-    echo     python -m venv .venv
-    echo     .venv\Scripts\python.exe -m pip install -r requirements.txt
+    echo     uv sync
     exit /b 1
 )
 

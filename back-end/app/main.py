@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlmodel import select
 
-from app import extraction, interviewer, questions, stt, triage, tts
+from app import extraction, interviewer, questions, rover, stt, triage, tts
 from app.db import (
     Assessment,
     CaseEvent,
@@ -63,6 +63,9 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
 )
+
+# Rover relays: phone video -> detection app, operator commands -> Pi.
+app.include_router(rover.router)
 
 
 # Every route (HTTP and WS) lives under /api — the reverse proxy at

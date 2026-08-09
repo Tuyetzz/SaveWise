@@ -135,3 +135,63 @@ def _local_ip() -> str:
             return s.getsockname()[0]
     except OSError:
         return "127.0.0.1"
+
+
+class WsPublisher:
+    """Pushes annotated JPEGs to the backend relay (--publish), so the admin
+    console can watch the detection view — boxes and all — from anywhere.
+
+    Best-effort by design: the backend being down must never slow or crash
+    the detection loop, so publish() swallows failures and retries the
+    connection at most every RETRY_S seconds.
+    """
+
+    RETRY_S = 3.0
+
+    def __init__(self, url: str, quality: int = 70, connect=None) -> None:
+        if connect is None:
+            import websocket  # lazy: only --publish runs need websocket-client
+
+            connect = lambda: websocket.create_connection(url, timeout=5)
+        self._url = url
+        self._quality = quality
+        self._connect = connect
+        self._ws = None
+        self._next_attempt = 0.0
+        self.sent = 0
+
+    def publish(self, frame: np.ndarray, now: float | None = None) -> None:
+        import time
+
+        now = time.monotonic() if now is None else now
+        if self._ws is None:
+            if now < self._next_attempt:
+                return
+            try:
+                self._ws = self._connect()
+                log.info("publishing annotated frames to %s", self._url)
+            except Exception as exc:
+                self._next_attempt = now + self.RETRY_S
+                log.debug("annotated publish connect failed: %s", exc)
+                return
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self._quality])
+        if not ok:
+            return
+        try:
+            self._ws.send_binary(buf.tobytes())
+            self.sent += 1
+        except Exception as exc:
+            log.warning("annotated publish send failed (%s); will reconnect", exc)
+            self._close_quietly()
+            self._next_attempt = now + self.RETRY_S
+
+    def _close_quietly(self) -> None:
+        if self._ws is not None:
+            try:
+                self._ws.close()
+            except Exception:
+                pass
+            self._ws = None
+
+    def stop(self) -> None:
+        self._close_quietly()

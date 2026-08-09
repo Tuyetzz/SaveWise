@@ -10,12 +10,20 @@ It watches through a forward-facing camera and writes a journey report.
 > ⚠️ Work lives on the **`feat/vision-subsystem`** branch, not `master`.
 > `git checkout feat/vision-subsystem`
 
-## Quick start (Windows)
+## Quick start
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
+uv sync                 # creates .venv and installs everything (torch is ~2-3 GB)
 .\demo.bat              # live webcam; or `.\demo.bat clip` for the test fixture
+```
+
+On the server, consuming the phone's relayed stream instead of a local camera,
+and publishing the annotated view (detection boxes) back for the admin console:
+
+```bash
+uv run python -m rescue_vision \
+  --source ws://127.0.0.1:8000/api/ws/video/feed \
+  --publish ws://127.0.0.1:8000/api/ws/video/annotated/upload
 ```
 
 Press **q** or **Esc** to stop. Model weights download themselves on first run.
@@ -58,12 +66,12 @@ please keep them:
    runs the whole loop offline. Keep new stages reachable from that test.
 
 ```powershell
-.venv\Scripts\python.exe -m pytest -q          # 167 tests, no hardware needed
-.venv\Scripts\python.exe -m pytest tests/test_sightings.py -v
+uv run pytest -q                               # full suite, no hardware needed
+uv run pytest tests/test_sightings.py -v
 ```
 
-Always call `.venv\Scripts\python.exe` explicitly. A conda `(base)` env is often
-active and has none of the dependencies.
+Always go through `uv run` (or `.venv`'s python explicitly). A conda `(base)`
+env is often active and has none of the dependencies.
 
 ## Gotchas that will cost you an hour
 
@@ -75,8 +83,9 @@ active and has none of the dependencies.
 - **Colour is keyed on sighting ID**, never on position in the frame — a person
   leaving must not repaint everyone else.
 - **YOLO26 is NMS-free**, so `iou=` does nothing. Tune with `conf=`.
-- **`lap` must be pip-installed.** Ultralytics fetches it over the network at
-  the first `track()` call, which fails on an offline Pi — and fails late.
+- **`lap` must stay a declared dependency** (it is, in `pyproject.toml`).
+  Ultralytics doesn't declare it and fetches it over the network at the first
+  `track()` call — which fails on an offline box, and fails late.
 - **Never `cv2.imshow` on the Pi** (headless). Use `--mjpeg-port` instead.
 
 ## Where the detail lives

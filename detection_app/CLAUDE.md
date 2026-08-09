@@ -21,9 +21,10 @@ reversed, and each reversal records why.
 ## Commands
 
 ```bash
-.venv/Scripts/python.exe -m pytest -q                    # full suite, no hardware needed
-.venv/Scripts/python.exe -m pytest tests/test_geometry.py -v
-.venv/Scripts/python.exe -m pytest tests/test_sightings.py::test_peak_confidence_is_the_maximum_not_the_last_value -v
+uv sync                                                  # install deps into .venv (torch ~2-3 GB)
+uv run pytest -q                                         # full suite, no hardware needed
+uv run pytest tests/test_geometry.py -v
+uv run pytest tests/test_sightings.py::test_peak_confidence_is_the_maximum_not_the_last_value -v
 ```
 
 ```powershell
@@ -31,8 +32,9 @@ reversed, and each reversal records why.
 .\demo.bat clip       # bundled 3-person fixture
 ```
 
-Always invoke `.venv/Scripts/python.exe` explicitly — a conda `(base)` environment is usually
-active and lacks every dependency.
+Always go through `uv run` (or `.venv`'s python explicitly) — a conda `(base)` environment is
+usually active and lacks every dependency. Dependencies live in `pyproject.toml` (uv project,
+same layout as back-end); there is no requirements.txt anymore.
 
 ## Architecture
 

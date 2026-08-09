@@ -38,7 +38,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--source",
         required=True,
-        help='Frame source: a video path, a webcam index ("0"), or "picamera".',
+        help='Frame source: a video path, a webcam index ("0"), "picamera", or '
+        "a ws:// / wss:// URL of the backend video relay "
+        "(e.g. wss://hackathon.marcusnguyen.dev/api/ws/video/feed).",
     )
     p.add_argument("--scan-model", default=None, help="Override the scan model path.")
     p.add_argument(
@@ -57,6 +59,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Serve an annotated MJPEG preview on this port. Use this instead "
         "of --display on the headless Pi.",
+    )
+    p.add_argument(
+        "--publish",
+        default=None,
+        metavar="WS_URL",
+        help="Push annotated frames (detection boxes drawn on) to the backend "
+        "relay so the admin console can watch, e.g. "
+        "ws://127.0.0.1:8000/api/ws/video/annotated/upload. Best-effort: a "
+        "down backend never slows detection.",
     )
     p.add_argument("--save-video", default=None, help="Write an annotated MP4 here.")
     p.add_argument(
@@ -196,6 +207,12 @@ def main(argv: list[str] | None = None) -> int:
         preview.start()
         log.info("watch the annotated feed at %s", preview.url)
 
+    publisher = None
+    if args.publish is not None:
+        from rescue_vision.preview import WsPublisher
+
+        publisher = WsPublisher(args.publish)
+
     video_writer = None
     if args.save_video:
         import cv2
@@ -214,6 +231,8 @@ def main(argv: list[str] | None = None) -> int:
             video_writer.write(result.annotated)
         if preview is not None:
             preview.publish(result.annotated)
+        if publisher is not None:
+            publisher.publish(result.annotated)
         if args.display:
             import cv2
 
@@ -247,6 +266,8 @@ def main(argv: list[str] | None = None) -> int:
             raw_writer.close()
         if preview is not None:
             preview.stop()
+        if publisher is not None:
+            publisher.stop()
         if video_writer is not None:
             video_writer.release()
         if args.display:

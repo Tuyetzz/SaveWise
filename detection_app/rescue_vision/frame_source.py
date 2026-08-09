@@ -152,15 +152,84 @@ class PiCameraSource(FrameSource):
         self._cam.close()
 
 
+class WebSocketFrameSource(FrameSource):
+    """JPEG frames pushed by the rover's phone through the backend relay
+    (/api/ws/video/feed). The Pi camera never worked — mismatched components —
+    so the phone mounted on the rover is the camera, and this source lets the
+    pipeline run on any machine that can reach the backend.
+
+    The relay is latest-frame, not a queue: if this pipeline is slower than
+    the phone's upload rate, intermediate frames are dropped server-side and
+    read() always returns something close to live.
+    """
+
+    def __init__(self, url: str, cfg: Config) -> None:
+        import websocket  # lazy: only ws runs need websocket-client
+
+        self._ws_exceptions = (websocket.WebSocketException, OSError)
+        log.info("connecting to frame relay %s", url)
+        self._ws = websocket.create_connection(url, timeout=10)
+        # Handshake done; frames only flow while the phone streams, which can
+        # start minutes later — so no read timeout, just wait.
+        self._ws.settimeout(None)
+        log.info("connected; waiting for the phone to start streaming...")
+        first = self._next_frame()
+        if first is None:
+            raise RuntimeError(f"frame relay closed before any frame: {url}")
+        self._pending: np.ndarray | None = first
+        self._h, self._w = first.shape[:2]
+
+    def _next_frame(self) -> np.ndarray | None:
+        while True:
+            data = self._ws.recv()
+            if isinstance(data, str):
+                continue  # relay control chatter, if any
+            if not data:
+                return None
+            frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+            if frame is not None:
+                return frame
+            log.warning("dropped an undecodable frame (%d bytes)", len(data))
+
+    def read(self) -> np.ndarray | None:
+        if self._pending is not None:
+            frame, self._pending = self._pending, None
+            return frame
+        try:
+            return self._next_frame()
+        except self._ws_exceptions:
+            # Relay gone (backend restarted, network dropped): end the journey
+            # cleanly so the sightings log and report still get written.
+            log.info("frame relay disconnected; ending journey")
+            return None
+
+    @property
+    def width(self) -> int:
+        return self._w
+
+    @property
+    def height(self) -> int:
+        return self._h
+
+    def close(self) -> None:
+        try:
+            self._ws.close()
+        except self._ws_exceptions:
+            pass
+
+
 def create_frame_source(spec: str, cfg: Config) -> FrameSource:
     """Build a source from a CLI spec.
 
     "picamera"    -> PiCameraSource (Pi only)
     "0", "1", ... -> WebcamSource at that index
+    "ws://..."    -> WebSocketFrameSource (phone stream via the backend relay)
     anything else -> VideoFileSource for that path
     """
     if spec == "picamera":
         return PiCameraSource(cfg)
     if spec.isdigit():
         return WebcamSource(int(spec), cfg)
+    if spec.startswith(("ws://", "wss://")):
+        return WebSocketFrameSource(spec, cfg)
     return VideoFileSource(spec)

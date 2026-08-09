@@ -82,6 +82,20 @@ def test_factory_selects_the_pi_camera_for_the_picamera_spec(monkeypatch):
     assert captured["built"] is True
 
 
+def test_factory_selects_the_ws_source_for_a_ws_url(monkeypatch):
+    import rescue_vision.frame_source as fs
+
+    captured = {}
+
+    class FakeWs:
+        def __init__(self, url, cfg):
+            captured["url"] = url
+
+    monkeypatch.setattr(fs, "WebSocketFrameSource", FakeWs)
+    fs.create_frame_source("wss://example.test/api/ws/video/feed", CFG)
+    assert captured["url"] == "wss://example.test/api/ws/video/feed"
+
+
 def test_factory_rejects_a_missing_path():
     with pytest.raises(FileNotFoundError):
         create_frame_source("definitely_not_here.mp4", CFG)

@@ -1,0 +1,5 @@
+# Raspberry Pi 5: gpiozero uses the lgpio backend there. Do NOT swap in
+# RPi.GPIO or pigpio — neither works on the Pi 5.
+gpiozero>=2.0
+lgpio>=0.2 ; platform_machine == "aarch64"
+websockets>=13

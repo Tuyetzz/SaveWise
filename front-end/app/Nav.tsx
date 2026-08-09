@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 const TABS = [
   { href: "/", key: "dashboard", label: "Command Dashboard" },
   { href: "/rover", key: "rover", label: "Rover Console" },
+  { href: "/control", key: "control", label: "Admin Console" },
 ] as const;
 
 export type TabKey = (typeof TABS)[number]["key"];
