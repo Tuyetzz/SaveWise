@@ -53,7 +53,7 @@ const emptyFields = (): Fields =>
 // --- client-side endpointing (the server never runs VAD) ---
 const VAD = {
   chunk: 512, // samples per worklet post @16 kHz = 32 ms
-  startRms: 0.015, // voiced above this
+  startRms: 0.015, // voiced above this — at sensitivity 50; scaled by the slider
   startChunks: 3, // ~96 ms of voice to open a segment
   endChunks: 28, // ~900 ms of silence to close it
   preRollChunks: 10, // ~320 ms kept from before the trigger
@@ -65,6 +65,19 @@ const VAD = {
   bargeEmaFactor: 3,
   bargeChunks: 4, // ~128 ms of sustained voice interrupts playback
 };
+
+// Mic sensitivity slider (0–100, default 50 = the tuned values above).
+// Lower sensitivity = higher trigger threshold = needs a louder voice.
+// 0 → 8× threshold, 100 → ⅛× — symmetric log scale around the default.
+export const DEFAULT_SENSITIVITY = 50;
+const SENSITIVITY_KEY = "savewise_mic_sensitivity";
+
+function thresholdMult(sensitivity: number): number {
+  return Math.pow(8, (DEFAULT_SENSITIVITY - sensitivity) / 50);
+}
+
+// Level meter and threshold tick share this scale (rms → 0..1 display).
+const LEVEL_SCALE = 12;
 
 // No answer for this long after a question finishes -> ask the server to
 // repeat. The server allows 3 asks total, then marks the case no-response.
@@ -136,6 +149,7 @@ export function useInterview() {
   const [level, setLevel] = useState(0);
   const [interviewId, setInterviewId] = useState<string | null>(null);
   const [micMode, setMicMode] = useState<MicMode>("auto");
+  const [sensitivity, setSensitivityState] = useState(DEFAULT_SENSITIVITY);
 
   const wsRef = useRef<WebSocket | null>(null);
   const playCtxRef = useRef<AudioContext | null>(null);
@@ -152,8 +166,24 @@ export function useInterview() {
   const phaseRef = useRef<Phase>("idle");
   const micModeRef = useRef<MicMode>("auto");
   const holdingRef = useRef(false);
+  // Ref mirror: the VAD reads it at audio rate, mid-interview changes apply
+  // to the very next chunk.
+  const sensitivityRef = useRef(DEFAULT_SENSITIVITY);
   phaseRef.current = phase;
   micModeRef.current = micMode;
+  sensitivityRef.current = sensitivity;
+
+  useEffect(() => {
+    const saved = Number(localStorage.getItem(SENSITIVITY_KEY));
+    if (Number.isFinite(saved) && saved >= 0 && saved <= 100)
+      setSensitivityState(saved);
+  }, []);
+
+  const setSensitivity = useCallback((s: number) => {
+    const clamped = Math.max(0, Math.min(100, s));
+    setSensitivityState(clamped);
+    localStorage.setItem(SENSITIVITY_KEY, String(clamped));
+  }, []);
 
   // VAD state lives in refs — it runs at audio rate, not render rate.
   const vad = useRef({
@@ -232,12 +262,14 @@ export function useInterview() {
       if (micModeRef.current === "hold") {
         if (holdingRef.current && phaseRef.current === "listening") {
           vad.current.segment.push(chunk);
-          setLevel(Math.min(1, rms * 12));
+          setLevel(Math.min(1, rms * LEVEL_SCALE));
         }
         return;
       }
 
       const v = vad.current;
+
+      const mult = thresholdMult(sensitivityRef.current);
 
       // Barge-in: while the question is playing, sustained voice well above
       // the ambient average interrupts playback and starts the answer segment.
@@ -245,7 +277,7 @@ export function useInterview() {
         const b = bargeRef.current;
         v.preRoll.push(chunk);
         if (v.preRoll.length > VAD.preRollChunks) v.preRoll.shift();
-        const threshold = Math.max(VAD.bargeFloor, b.ema * VAD.bargeEmaFactor);
+        const threshold = Math.max(VAD.bargeFloor * mult, b.ema * VAD.bargeEmaFactor);
         b.count = rms > threshold ? b.count + 1 : 0;
         b.ema = b.ema * 0.95 + rms * 0.05;
         if (b.count >= VAD.bargeChunks) {
@@ -263,9 +295,9 @@ export function useInterview() {
       }
 
       if (phaseRef.current !== "listening") return; // half-duplex gate
-      setLevel(Math.min(1, rms * 12));
+      setLevel(Math.min(1, rms * LEVEL_SCALE));
 
-      const voiced = rms > VAD.startRms;
+      const voiced = rms > VAD.startRms * mult;
       if (!v.inSpeech) {
         v.preRoll.push(chunk);
         if (v.preRoll.length > VAD.preRollChunks) v.preRoll.shift();
@@ -487,6 +519,13 @@ export function useInterview() {
 
   useEffect(() => cleanup, [cleanup]);
 
+  // Where the voice trigger sits on the level meter (same 0..1 scale as
+  // `level`) so the console can draw a threshold tick.
+  const micThreshold = Math.min(
+    1,
+    VAD.startRms * thresholdMult(sensitivity) * LEVEL_SCALE,
+  );
+
   return {
     phase,
     feed,
@@ -495,6 +534,9 @@ export function useInterview() {
     interviewId,
     micMode,
     setMicMode,
+    sensitivity,
+    setSensitivity,
+    micThreshold,
     start,
     end,
     holdStart,

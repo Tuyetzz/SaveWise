@@ -24,3 +24,33 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Reasoning panel: flash on live updates, slide-in on open. Elements are
+   remounted with a fresh key when new data arrives so the flash replays. */
+@keyframes reasoning-flash {
+  0% {
+    background-color: rgb(56 189 248 / 0.25);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.reasoning-flash {
+  animation: reasoning-flash 1.4s ease-out;
+}
+
+@keyframes reasoning-slide-in {
+  from {
+    transform: translateX(2rem);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.reasoning-slide-in {
+  animation: reasoning-slide-in 0.2s ease-out;
+}

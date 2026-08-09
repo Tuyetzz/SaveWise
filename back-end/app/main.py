@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlmodel import select
 
-from app import extraction, questions, stt, triage, tts
+from app import extraction, interviewer, questions, stt, triage, tts
 from app.db import (
     Assessment,
     CaseEvent,
@@ -45,6 +45,14 @@ async def lifespan(app: FastAPI):
     yield
 
 
+def run() -> None:
+    """`uv run dev` entrypoint. No --reload: it would re-load the Whisper
+    model on every save."""
+    import uvicorn
+
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000)
+
+
 app = FastAPI(lifespan=lifespan)
 
 # The dashboard runs on another port; no auth by design (trusted LAN, POC).
@@ -58,13 +66,53 @@ def health():
     return {"status": "ok"}
 
 
-def _case_summary(s: Session, interview: Interview) -> dict:
-    latest = s.exec(
-        select(Assessment)
-        .where(Assessment.interview_id == interview.id)
-        .order_by(Assessment.turn_seq.desc())
-    ).first()
-    fields = latest.fields if latest else {}
+class DashboardHub:
+    """Fan-out of case-change notifications to open dashboards. Payloads are
+    intentionally just pointers ({t, case_id}) — clients refetch, so the
+    HTTP endpoints stay the single source of truth."""
+
+    def __init__(self) -> None:
+        self.clients: set[WebSocket] = set()
+
+    async def broadcast(self, payload: dict) -> None:
+        message = json.dumps(payload)
+        for ws in list(self.clients):
+            try:
+                await ws.send_text(message)
+            except Exception:
+                self.clients.discard(ws)
+
+
+hub = DashboardHub()
+
+
+@app.websocket("/ws/dashboard")
+async def dashboard_ws(ws: WebSocket):
+    await ws.accept()
+    hub.clients.add(ws)
+    try:
+        while True:
+            await ws.receive_text()  # nothing expected; detects disconnect
+    except WebSocketDisconnect:
+        pass
+    finally:
+        hub.clients.discard(ws)
+
+
+def _case_summary(
+    s: Session, interview: Interview, fields_override: dict | None = None
+) -> dict:
+    """fields_override replays the summary as of an earlier assessment
+    snapshot (used to compute a case's previous queue position)."""
+    if fields_override is not None:
+        fields = fields_override
+    else:
+        latest = s.exec(
+            select(Assessment)
+            .where(Assessment.interview_id == interview.id)
+            .order_by(Assessment.turn_seq.desc())
+        ).first()
+        fields = latest.fields if latest else {}
     result = triage.classify(fields, interview.status)
     last_turn = s.exec(
         select(Turn)
@@ -114,14 +162,18 @@ def _case_summary(s: Session, interview: Interview) -> dict:
     }
 
 
+def _ranked(cases: list[dict]) -> list[dict]:
+    # Rescued cases sink below everything still outstanding.
+    return sorted(
+        cases,
+        key=lambda c: (c["workflow"] == "rescued", -c["score"], c["last_heard_at"]),
+    )
+
+
 @app.get("/api/dashboard")
 def dashboard():
     with Session(engine) as s:
-        cases = [_case_summary(s, i) for i in s.exec(select(Interview)).all()]
-    # Rescued cases sink below everything still outstanding.
-    cases.sort(
-        key=lambda c: (c["workflow"] == "rescued", -c["score"], c["last_heard_at"])
-    )
+        cases = _ranked([_case_summary(s, i) for i in s.exec(select(Interview)).all()])
 
     counts = {"immediate": 0, "delayed": 0, "minor": 0}
     for c in cases:
@@ -166,7 +218,7 @@ _EVENT_VALUES = {
 
 
 @app.post("/api/cases/{case_id}/events")
-def add_event(case_id: str, event: EventIn):
+async def add_event(case_id: str, event: EventIn):
     if event.kind in _EVENT_VALUES:
         if event.value not in _EVENT_VALUES[event.kind]:
             raise HTTPException(400, f"invalid value for {event.kind}: {event.value}")
@@ -191,6 +243,7 @@ def add_event(case_id: str, event: EventIn):
         interview = s.get(Interview, case_id)
         summary = _case_summary(s, interview)
     print(f"[{case_id}] responder event: {event.kind}={event.value or event.note!r}")
+    await hub.broadcast({"t": "case_updated", "case_id": case_id})
     return summary
 
 
@@ -240,23 +293,160 @@ def case_detail(case_id: str):
     }
 
 
+def _audio_ms(audio_path: str | None) -> int | None:
+    """Duration of a stored answer segment. Segments are raw PCM16 mono
+    @ 16 kHz, so ms = bytes / 32."""
+    if not audio_path:
+        return None
+    try:
+        return Path(audio_path).stat().st_size // 32
+    except OSError:
+        return None
+
+
+@app.get("/api/cases/{case_id}/reasoning")
+def case_reasoning(case_id: str):
+    """The full decision chain for the latest assessment: what was heard,
+    what the LLM extracted, which deterministic rule fired, and how the case
+    moved in the queue. Everything is recomputed from stored turns and
+    assessment snapshots — nothing here is narrated after the fact."""
+    with Session(engine) as s:
+        interview = s.get(Interview, case_id)
+        if interview is None:
+            raise HTTPException(404, "case not found")
+
+        turns = s.exec(
+            select(Turn).where(Turn.interview_id == case_id).order_by(Turn.seq)
+        ).all()
+        assessments = s.exec(
+            select(Assessment)
+            .where(Assessment.interview_id == case_id)
+            .order_by(Assessment.turn_seq)
+        ).all()
+        latest = assessments[-1] if assessments else None
+        previous = assessments[-2] if len(assessments) >= 2 else None
+        fields = latest.fields if latest else {f: None for f in questions.FIELD_ORDER}
+        prev_fields = previous.fields if previous else None
+
+        summaries = [_case_summary(s, i) for i in s.exec(select(Interview)).all()]
+        ranked = _ranked(summaries)
+        current_position = next(
+            i + 1 for i, c in enumerate(ranked) if c["id"] == case_id
+        )
+        summary = ranked[current_position - 1]
+
+        # Previous position: replay the queue with this case's previous
+        # assessment snapshot, everyone else unchanged.
+        prev_position = None
+        moved_ahead_of: list[str] = []
+        prev_result = None
+        if previous is not None:
+            prev_summary = _case_summary(s, interview, fields_override=prev_fields)
+            prev_ranked = _ranked(
+                [c for c in summaries if c["id"] != case_id] + [prev_summary]
+            )
+            prev_position = next(
+                i + 1 for i, c in enumerate(prev_ranked) if c["id"] == case_id
+            )
+            above_before = {c["id"] for c in prev_ranked[: prev_position - 1]}
+            below_now = {c["id"] for c in ranked[current_position:]}
+            moved_ahead_of = [
+                c["id"] for c in ranked[current_position:] if c["id"] in above_before
+            ] if above_before & below_now else []
+            prev_result = triage.classify(prev_fields, "complete")
+
+    result = triage.classify(fields, interview.status)
+
+    field_entries = {}
+    for name in questions.FIELD_ORDER:
+        value = fields.get(name)
+        prev_value = (prev_fields or {}).get(name)
+        field_entries[name] = {
+            "value": value,
+            "known": value is not None,
+            # On the very first assessment everything the LLM filled in is new.
+            "changed_this_turn": (
+                value != prev_value if previous is not None else value is not None
+            ),
+        }
+    known_count = sum(1 for e in field_entries.values() if e["known"])
+
+    return {
+        "case": {
+            "id": interview.id,
+            "status": interview.status,
+            "started_at": interview.started_at.isoformat(),
+            "ended_at": interview.ended_at.isoformat() if interview.ended_at else None,
+            "workflow": summary["workflow"],
+        },
+        "assessment": {
+            "version": latest.turn_seq if latest else 0,
+            "source": "llm_extraction",
+            "created_at": latest.created_at.isoformat() if latest else None,
+            "fields": field_entries,
+            "chief_complaint": fields.get("injuries"),
+            "completeness_pct": round(100 * known_count / len(questions.FIELD_ORDER)),
+            "unknown_fields": [n for n, e in field_entries.items() if not e["known"]],
+        },
+        "transcript": {
+            "turns": [
+                {
+                    "index": t.seq,
+                    "question_text": t.question_text,
+                    "transcript": t.transcript,
+                    "audio_duration_ms": _audio_ms(t.audio_path),
+                }
+                for t in turns
+            ]
+        },
+        "decision": {
+            "category": result["category"],
+            "previous_category": prev_result["category"] if prev_result else None,
+            "changed_category": (
+                prev_result is not None
+                and prev_result["category"] != result["category"]
+            ),
+            "rule_fired": result["rule_fired"],
+            "trace": result["trace"],
+            "unknown_escalated": result["rule_fired"] == "unknown_escalated",
+            "unknown_gates": result["unknown_gates"],
+            "overridden": summary["overridden"],
+            "displayed_category": summary["category"],
+        },
+        "ranking": {
+            "previous_position": prev_position,
+            "current_position": current_position,
+            "delta": (prev_position - current_position) if prev_position else None,
+            "queue_size": len(ranked),
+            "urgency_score": summary["score"],
+            "moved_ahead_of": moved_ahead_of,
+        },
+    }
+
+
 async def send_question(
-    ws: WebSocket, question: questions.Question, seq: int, attempt: int = 1
+    ws: WebSocket,
+    question: questions.Question,
+    seq: int,
+    text: str,
+    attempt: int = 1,
 ) -> None:
+    """text is the phrasing actually spoken this turn (LLM-generated, or the
+    preset fallback) — not necessarily question.text."""
     await ws.send_text(
         json.dumps(
             {
                 "t": "question",
                 "question_id": question.id,
                 "seq": seq,
-                "text": question.text,
+                "text": text,
                 "sample_rate": tts.SAMPLE_RATE,
                 "attempt": attempt,
             }
         )
     )
     try:
-        pcm = tts.speak(question.text)
+        pcm = tts.speak(text)
         for i in range(0, len(pcm), tts.CHUNK_BYTES):
             await ws.send_bytes(pcm[i : i + tts.CHUNK_BYTES])
     except Exception as exc:
@@ -270,8 +460,10 @@ async def converse(ws: WebSocket):
     await ws.accept()
     interview_id = uuid.uuid4().hex[:8]
     fields: dict = {f: None for f in questions.FIELD_ORDER}
-    asked: list[str] = []
+    asked: list[str] = []  # one entry per ask — a circled-back id appears twice
+    history: list[dict] = []  # [{"question": spoken text, "answer": transcript}]
     current_q: questions.Question | None = None
+    current_text: str | None = None  # what was actually spoken this turn
     seq = 0
     asks = 0
     started = False
@@ -290,10 +482,14 @@ async def converse(ws: WebSocket):
                         s.add(Interview(id=interview_id))
                         s.commit()
                     print(f"[{interview_id}] interview started")
+                    await hub.broadcast(
+                        {"t": "case_updated", "case_id": interview_id}
+                    )
                     current_q = questions.next_question(fields, asked)
                     asked.append(current_q.id)
                     asks = 1
-                    await send_question(ws, current_q, seq + 1)
+                    current_text = interviewer.phrase(current_q, history, fields)
+                    await send_question(ws, current_q, seq + 1, current_text)
                 elif ctrl.get("t") == "repeat":
                     # Client heard nothing for ~5 s. Re-ask, up to MAX_ASKS,
                     # then the case is no-response.
@@ -304,10 +500,17 @@ async def converse(ws: WebSocket):
                     elif asks < MAX_ASKS:
                         asks += 1
                         print(
-                            f"[{interview_id}] no response, repeating "
+                            f"[{interview_id}] no response, re-asking "
                             f"{current_q.id} (attempt {asks}/{MAX_ASKS})"
                         )
-                        await send_question(ws, current_q, seq + 1, attempt=asks)
+                        # Rephrased, not repeated verbatim: simpler and more
+                        # reassuring each time the survivor stays silent.
+                        current_text = interviewer.phrase(
+                            current_q, history, fields, attempt=asks
+                        )
+                        await send_question(
+                            ws, current_q, seq + 1, current_text, attempt=asks
+                        )
                     else:
                         final_status = "no_response"
                         print(
@@ -353,15 +556,20 @@ async def converse(ws: WebSocket):
                             interview_id=interview_id,
                             seq=seq,
                             question_id=current_q.id,
-                            question_text=current_q.text,
+                            question_text=current_text or current_q.text,
                             transcript=transcript,
                             audio_path=str(audio_path),
                             stt_ms=stt_ms,
                         )
                     )
                     s.commit()
+                history.append(
+                    {"question": current_text or current_q.text, "answer": transcript}
+                )
 
-                fields = extraction.extract(transcript, current_q.id, fields)
+                fields = extraction.extract(
+                    transcript, current_q.id, fields, question_text=current_text
+                )
                 known = {k: v for k, v in fields.items() if v is not None}
                 unknown = [k for k, v in fields.items() if v is None]
                 print(f"[{interview_id}] turn {seq} fields known={known} unknown={unknown}")
@@ -375,6 +583,9 @@ async def converse(ws: WebSocket):
                         )
                     )
                     s.commit()
+                await hub.broadcast(
+                    {"t": "case_updated", "case_id": interview_id, "turn_seq": seq}
+                )
 
                 next_q = questions.next_question(fields, asked)
                 if next_q is None:
@@ -385,9 +596,15 @@ async def converse(ws: WebSocket):
                     print(f"[{interview_id}] interview complete after turn {seq}")
                     break
                 current_q = next_q
+                # Second time round for this goal? Tell the phraser so it can
+                # acknowledge ("I know I asked before...") instead of pressing.
+                revisit = asked.count(next_q.id) + 1
                 asked.append(next_q.id)
                 asks = 1
-                await send_question(ws, next_q, seq + 1)
+                current_text = interviewer.phrase(
+                    next_q, history, fields, attempt=revisit
+                )
+                await send_question(ws, next_q, seq + 1, current_text)
     except WebSocketDisconnect:
         pass
     finally:
@@ -400,5 +617,6 @@ async def converse(ws: WebSocket):
                 interview.ended_at = datetime.utcnow()
                 s.add(interview)
                 s.commit()
+            await hub.broadcast({"t": "case_updated", "case_id": interview_id})
             if status == "abandoned":
                 print(f"[{interview_id}] interview abandoned at turn {seq}")

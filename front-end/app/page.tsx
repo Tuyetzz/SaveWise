@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Nav from "./Nav";
+import ReasoningPanel from "./ReasoningPanel";
+import { apiBase, CAT, CATEGORY_ORDER, type Category } from "./triageDisplay";
 import { type FieldName } from "./useInterview";
-
-type Category = "immediate" | "delayed" | "minor";
 
 type Workflow = "outstanding" | "dispatched" | "rescued";
 
@@ -61,34 +61,10 @@ interface Dashboard {
   }[];
 }
 
-const CATEGORY_ORDER: Category[] = ["immediate", "delayed", "minor"];
-
 const WORKFLOW_CHIP: Record<Workflow, string> = {
   outstanding: "",
   dispatched: "border-sky-500/40 text-sky-300",
   rescued: "border-emerald-500/40 text-emerald-300",
-};
-
-// Triage status colors — always icon + label, never color alone.
-const CAT: Record<Category, { label: string; icon: string; badge: string; edge: string }> = {
-  immediate: {
-    label: "IMMEDIATE",
-    icon: "▲",
-    badge: "bg-red-500/15 text-red-400 border border-red-500/40",
-    edge: "border-l-red-500",
-  },
-  delayed: {
-    label: "DELAYED",
-    icon: "◆",
-    badge: "bg-amber-400/15 text-amber-300 border border-amber-400/40",
-    edge: "border-l-amber-400",
-  },
-  minor: {
-    label: "MINOR",
-    icon: "●",
-    badge: "bg-emerald-500/15 text-emerald-300 border border-emerald-500/40",
-    edge: "border-l-emerald-500",
-  },
 };
 
 const STATUS_CHIP: Record<string, string> = {
@@ -97,11 +73,6 @@ const STATUS_CHIP: Record<string, string> = {
   abandoned: "text-zinc-500 border-zinc-700",
   no_response: "text-fuchsia-300 border-fuchsia-500/40",
 };
-
-function apiBase(): string {
-  if (typeof window === "undefined") return "";
-  return `${window.location.protocol}//${window.location.hostname}:8000`;
-}
 
 function ago(iso: string): string {
   const s = Math.max(0, Math.round((Date.now() - new Date(iso + "Z").getTime()) / 1000));
@@ -157,7 +128,15 @@ function ActionButton({
   );
 }
 
-function CaseRow({ c, onChanged }: { c: CaseSummary; onChanged: () => void }) {
+function CaseRow({
+  c,
+  onChanged,
+  onOpenReasoning,
+}: {
+  c: CaseSummary;
+  onChanged: () => void;
+  onOpenReasoning: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<CaseDetail | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
@@ -204,7 +183,7 @@ function CaseRow({ c, onChanged }: { c: CaseSummary; onChanged: () => void }) {
     <div
       className={`rounded-xl border border-zinc-800 border-l-4 bg-zinc-900/60 transition-colors hover:border-zinc-700 ${cat.edge} ${rescued ? "opacity-55" : ""}`}
     >
-      <button onClick={toggle} className="block w-full px-4 pt-3 text-left">
+      <button onClick={onOpenReasoning} className="block w-full px-4 pt-3 text-left">
         <div className="flex flex-wrap items-center gap-2">
           <span className={`rounded px-2 py-0.5 text-[11px] font-bold tracking-wider ${cat.badge}`}>
             {cat.icon} {cat.label}
@@ -229,9 +208,7 @@ function CaseRow({ c, onChanged }: { c: CaseSummary; onChanged: () => void }) {
           )}
           <span className="ml-auto flex items-center gap-2 text-[11px] tabular-nums text-zinc-500">
             score {c.score} · {ago(c.last_heard_at)}
-            <span className={`text-zinc-600 transition-transform ${open ? "rotate-90" : ""}`}>
-              ▸
-            </span>
+            <span className="text-zinc-600">⚖ why?</span>
           </span>
         </div>
         <div className="mt-2 flex flex-wrap gap-1.5">
@@ -296,6 +273,10 @@ function CaseRow({ c, onChanged }: { c: CaseSummary; onChanged: () => void }) {
             ↺ Reopen
           </ActionButton>
         )}
+        <span className="mx-1 h-4 w-px bg-zinc-800" />
+        <ActionButton onClick={toggle}>
+          {open ? "▾" : "▸"} Log
+        </ActionButton>
       </div>
 
       {open && (
@@ -377,6 +358,7 @@ export default function CommandDashboard() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number>(0);
+  const [reasoningId, setReasoningId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -441,7 +423,12 @@ export default function CommandDashboard() {
                   </span>
                 </div>
                 {data.cases.map((c) => (
-                  <CaseRow key={c.id} c={c} onChanged={load} />
+                  <CaseRow
+                    key={c.id}
+                    c={c}
+                    onChanged={load}
+                    onOpenReasoning={() => setReasoningId(c.id)}
+                  />
                 ))}
                 {data.cases.length === 0 && (
                   <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900/40 p-10 text-center">
@@ -489,6 +476,13 @@ export default function CommandDashboard() {
               </aside>
             </div>
           </>
+        )}
+
+        {reasoningId && (
+          <ReasoningPanel
+            caseId={reasoningId}
+            onClose={() => setReasoningId(null)}
+          />
         )}
 
         <footer className="border-t border-zinc-900 pt-3 text-center text-[11px] text-zinc-700">

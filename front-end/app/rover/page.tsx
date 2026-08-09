@@ -48,6 +48,9 @@ export default function RoverConsole() {
     interviewId,
     micMode,
     setMicMode,
+    sensitivity,
+    setSensitivity,
+    micThreshold,
     start,
     end,
     holdStart,
@@ -154,14 +157,22 @@ export default function RoverConsole() {
               </div>
             ) : (
               <div className="flex items-center gap-3">
-                {/* level meter */}
-                <div className="h-2 flex-1 overflow-hidden rounded bg-zinc-800">
+                {/* level meter with voice-trigger tick — speech must cross
+                    the amber line to start a recording */}
+                <div className="relative h-2 flex-1 overflow-hidden rounded bg-zinc-800">
                   <div
                     className={`h-full transition-[width] duration-75 ${
                       phase === "listening" ? "bg-emerald-400" : "bg-zinc-600"
                     }`}
                     style={{ width: `${Math.round(level * 100)}%` }}
                   />
+                  {micMode === "auto" && (
+                    <div
+                      className="absolute inset-y-0 w-0.5 bg-amber-400"
+                      style={{ left: `${Math.round(micThreshold * 100)}%` }}
+                      title="voice trigger threshold"
+                    />
+                  )}
                 </div>
                 {micMode === "hold" && (
                   <button
@@ -190,6 +201,34 @@ export default function RoverConsole() {
                 </button>
               </div>
             )}
+
+            {/* mic sensitivity — applies live; persisted across reloads */}
+            <div className="mt-3 flex items-center gap-3">
+              <span className="shrink-0 text-[10px] uppercase tracking-widest text-zinc-500">
+                Mic sensitivity
+              </span>
+              <span className="text-[10px] text-zinc-600">noisy site</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={sensitivity}
+                onChange={(e) => setSensitivity(Number(e.target.value))}
+                disabled={micMode === "hold"}
+                className="h-1 flex-1 accent-emerald-500 disabled:opacity-30"
+                aria-label="Microphone sensitivity"
+              />
+              <span className="text-[10px] text-zinc-600">quiet room</span>
+              <span className="w-7 text-right text-[11px] font-semibold tabular-nums text-zinc-300">
+                {sensitivity}
+              </span>
+            </div>
+            <p className="mt-1 text-[10px] leading-relaxed text-zinc-600">
+              {micMode === "hold"
+                ? "Sensitivity is ignored in push-to-talk mode."
+                : "Lower it if background noise keeps triggering recordings — speech has to cross the amber line on the meter. Takes effect immediately."}
+            </p>
           </div>
         </section>
 

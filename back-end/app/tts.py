@@ -1,6 +1,6 @@
-"""OpenAI TTS with an on-disk cache. The question set is finite and
-deterministic, so after one run every question is cached and TTS leaves the
-critical path on its own."""
+"""OpenAI TTS with an on-disk cache. Question phrasing is LLM-generated per
+survivor, so most utterances are cache misses — the cache still removes
+repeats and the preset fallback phrasings from the critical path."""
 
 import hashlib
 import os

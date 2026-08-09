@@ -52,11 +52,18 @@ Rules:
   too."""
 
 
-def extract(transcript: str, question_id: str, prior: dict) -> dict:
+def extract(
+    transcript: str, question_id: str, prior: dict, question_text: str | None = None
+) -> dict:
     """One extraction call, merged over prior. A null in the response never
     overwrites a known prior value. On any failure, return prior unchanged —
-    the interview continues and the field stays unknown."""
+    the interview continues and the field stays unknown.
+
+    question_text is the phrasing actually spoken (questions are LLM-worded
+    per survivor); the preset text is the fallback context."""
     question = QUESTIONS_BY_ID.get(question_id)
+    if question_text is None:
+        question_text = question.text if question else question_id
     try:
         # gpt-5.6-luna only supports the default temperature (rejects 0);
         # determinism relies on the strict JSON schema instead.
@@ -75,7 +82,7 @@ def extract(transcript: str, question_id: str, prior: dict) -> dict:
                 {
                     "role": "user",
                     "content": (
-                        f"Question asked: {question.text if question else question_id}\n"
+                        f"Question asked: {question_text}\n"
                         f"Transcribed answer: {transcript}\n"
                         f"Fields already known: "
                         f"{json.dumps({k: v for k, v in prior.items() if v is not None})}"

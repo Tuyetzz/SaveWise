@@ -1,8 +1,14 @@
 # DisasterResponse — Phase 1 voice interview backend
 
 Audio in → transcript → clinical field extraction → next question out as audio,
-over one WebSocket. The LLM extracts fields only; question order and (later)
-triage classification are deterministic code.
+over one WebSocket. Deterministic code decides WHAT happens: which field to ask
+for next (`questions.py`, including one circle-back for triage-critical fields
+still unknown after the first pass) and triage classification (`triage.py`).
+The LLM only extracts fields (`extraction.py`) and words each question for the
+actual survivor (`interviewer.py`) — acknowledging what they just said,
+simplifying on silence or confusion, never choosing goals or triage. If
+phrasing generation fails, the preset question text ships instead; the
+interview never blocks on a model.
 
 ## Setup
 
@@ -12,6 +18,12 @@ uv sync
 ```
 
 ## Run
+
+```bash
+uv run dev
+```
+
+Serves on `0.0.0.0:8000`. For TLS (phone access) run uvicorn directly:
 
 ```bash
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 \
@@ -31,6 +43,19 @@ then one binary PCM16 16 kHz mono frame per complete utterance (client does the
 endpointing). Server replies per turn: `question` + binary PCM (24 kHz) +
 `question_end`, then after each answer `transcript`, `fields`, and eventually
 `complete`.
+
+`/ws/dashboard`, any number of connections. Server pushes
+`{"t": "case_updated", "case_id": ...}` whenever an interview starts, an
+assessment lands, a status changes, or a responder acts. Payloads are pointers,
+not state — clients refetch, so the HTTP endpoints stay the source of truth.
+
+`GET /api/cases/{id}/reasoning` returns the full decision chain for the latest
+assessment: verbatim transcript turns (with audio duration), per-field
+extraction state (`value`/`known`/`changed_this_turn`), the classifier's own
+`trace` (every condition evaluated, the values it read, whether it matched —
+emitted by `triage.classify` as it runs, not reconstructed), and the queue
+effect (previous vs current position, additive score, which cases it moved
+ahead of). Backs the dashboard's reasoning panel.
 
 ## Reset / inspect
 
