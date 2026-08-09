@@ -14,7 +14,7 @@ import {
 const PHASE_INFO: Record<Phase, { label: string; dot: string }> = {
   idle: { label: "Ready", dot: "bg-zinc-500" },
   connecting: { label: "Connecting…", dot: "bg-amber-400 animate-pulse" },
-  asking: { label: "Speaking question", dot: "bg-sky-400 animate-pulse" },
+  asking: { label: "Speaking", dot: "bg-sky-400 animate-pulse" },
   listening: { label: "Listening", dot: "bg-emerald-400 animate-pulse" },
   processing: { label: "Processing answer", dot: "bg-amber-400 animate-pulse" },
   complete: { label: "Complete", dot: "bg-emerald-500" },
@@ -108,6 +108,17 @@ export default function RoverConsole() {
                       Question {entry.seq}
                     </p>
                     <div className="rounded-lg rounded-tl-none border border-sky-900/60 bg-sky-950/40 px-3 py-2 text-sm">
+                      {entry.text}
+                    </div>
+                  </div>
+                );
+              if (entry.kind === "closing")
+                return (
+                  <div key={i} className="max-w-[85%]">
+                    <p className="mb-0.5 text-[10px] uppercase tracking-widest text-emerald-500">
+                      📡 Responders notified
+                    </p>
+                    <div className="rounded-lg rounded-tl-none border border-emerald-700/60 bg-emerald-950/40 px-3 py-2 text-sm">
                       {entry.text}
                     </div>
                   </div>

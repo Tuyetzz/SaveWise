@@ -48,6 +48,28 @@ def test_falls_back_to_preset_on_empty_utterance(monkeypatch):
     assert text == QUESTIONS["breathing"].text
 
 
+def test_closing_uses_generated_message(monkeypatch):
+    monkeypatch.setattr(
+        interviewer._client.chat.completions,
+        "create",
+        lambda **kwargs: _response(
+            {"utterance": "You did great. Responders are notified and on their way."}
+        ),
+    )
+    text = interviewer.closing([], {})
+    assert text == "You did great. Responders are notified and on their way."
+
+
+def test_closing_falls_back_on_api_error(monkeypatch):
+    """The confirmation that help was notified must always be spoken."""
+
+    def boom(**kwargs):
+        raise RuntimeError("api down")
+
+    monkeypatch.setattr(interviewer._client.chat.completions, "create", boom)
+    assert interviewer.closing([], {}) == interviewer.CLOSING_FALLBACK
+
+
 def test_conversation_goal_and_attempt_reach_the_model(monkeypatch):
     captured: dict = {}
 

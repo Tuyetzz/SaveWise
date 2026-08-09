@@ -455,6 +455,20 @@ async def send_question(
     await ws.send_text(json.dumps({"t": "question_end"}))
 
 
+async def send_closing(ws: WebSocket, text: str) -> None:
+    """Spoken sign-off: confirms the request was received and responders are
+    notified. Same audio path as questions, but no answer is expected."""
+    await ws.send_text(
+        json.dumps({"t": "closing", "text": text, "sample_rate": tts.SAMPLE_RATE})
+    )
+    try:
+        pcm = tts.speak(text)
+        for i in range(0, len(pcm), tts.CHUNK_BYTES):
+            await ws.send_bytes(pcm[i : i + tts.CHUNK_BYTES])
+    except Exception as exc:
+        print(f"[tts] closing failed: {exc}")
+
+
 @app.websocket("/ws/converse")
 async def converse(ws: WebSocket):
     await ws.accept()
@@ -517,6 +531,9 @@ async def converse(ws: WebSocket):
                             f"[{interview_id}] no response after {asks} asks "
                             f"of {current_q.id} — marking case no-response"
                         )
+                        # They may hear even if they can't speak — say that
+                        # help has been alerted before moving on.
+                        await send_closing(ws, interviewer.NO_RESPONSE_CLOSING)
                         await ws.send_text(
                             json.dumps(
                                 {"t": "no_response", "interview_id": interview_id}
@@ -590,6 +607,9 @@ async def converse(ws: WebSocket):
                 next_q = questions.next_question(fields, asked)
                 if next_q is None:
                     final_status = "complete"
+                    await send_closing(
+                        ws, interviewer.closing(history, fields)
+                    )
                     await ws.send_text(
                         json.dumps({"t": "complete", "interview_id": interview_id})
                     )

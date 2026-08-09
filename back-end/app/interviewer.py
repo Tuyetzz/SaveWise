@@ -51,6 +51,76 @@ Write ONE short spoken utterance that:
 - the text is spoken by TTS: no lists, no emojis, no stage directions."""
 
 
+# Spoken when the interview finishes. The victim must hear that the request
+# was received and rescuers are coming — that certainty is itself first aid.
+CLOSING_FALLBACK = (
+    "Thank you — you did really well. I've sent everything to the first "
+    "responders. They've been notified, they know where you are, and they "
+    "will reach you as fast as they can. Try to stay still and save your "
+    "strength. Help is on the way."
+)
+
+# Spoken before the rover moves on from a survivor who never answered —
+# they may be able to hear even if they can't speak.
+NO_RESPONSE_CLOSING = (
+    "If you can hear me: I have alerted the first responders. They know "
+    "where you are, and they will reach you as fast as they can. "
+    "Help is on the way."
+)
+
+_CLOSING_PROMPT = """You voice a rescue robot that has just finished interviewing one
+survivor trapped under a collapsed building. Their answers have been sent on.
+Write the ONE short spoken message the robot says before standing by.
+
+It must:
+- thank them warmly for answering — they may be in pain or scared.
+- clearly confirm their request is received: the first responders have been
+  notified, they know where the survivor is, and they will reach them as
+  fast as they can.
+- encourage them to hold on and save their strength.
+- reassure without promises: "help is on the way" is fine; never give
+  arrival times, never promise they will be okay.
+- at most 45 words, everyday words, no medical jargon, never mention triage.
+- the text is spoken by TTS: no lists, no emojis, no stage directions."""
+
+
+def closing(history: list[dict], fields: dict) -> str:
+    """The end-of-interview reassurance, adapted to the conversation. Falls
+    back to the fixed message on any failure — the confirmation that help
+    was notified must always be spoken."""
+    try:
+        convo = "\n".join(
+            f"Robot: {h['question']}\nSurvivor: {h['answer']}" for h in history
+        ) or "(no conversation recorded)"
+        known = {k: v for k, v in fields.items() if v is not None}
+        response = _client.chat.completions.create(
+            model="gpt-5.6-luna",
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "utterance",
+                    "strict": True,
+                    "schema": _SCHEMA,
+                },
+            },
+            messages=[
+                {"role": "system", "content": _CLOSING_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Conversation so far:\n{convo}\n\n"
+                        f"What we learned: {json.dumps(known)}"
+                    ),
+                },
+            ],
+        )
+        utterance = json.loads(response.choices[0].message.content)["utterance"].strip()
+        return utterance or CLOSING_FALLBACK
+    except Exception as exc:
+        print(f"[interviewer] closing failed, using preset: {exc}")
+        return CLOSING_FALLBACK
+
+
 def phrase(
     question: Question,
     history: list[dict],

@@ -41,8 +41,10 @@ accept the certificate warning, otherwise the `wss://` handshake fails opaquely.
 `/ws/converse`, one connection per interview. Client sends `{"t":"start"}`,
 then one binary PCM16 16 kHz mono frame per complete utterance (client does the
 endpointing). Server replies per turn: `question` + binary PCM (24 kHz) +
-`question_end`, then after each answer `transcript`, `fields`, and eventually
-`complete`.
+`question_end`, then after each answer `transcript`, `fields`. When the
+interview ends (`complete` or `no_response`), a spoken `closing` + audio is
+sent first — confirming first responders are notified and coming — so the
+survivor always hears that the request was received.
 
 `/ws/dashboard`, any number of connections. Server pushes
 `{"t": "case_updated", "case_id": ...}` whenever an interview starts, an

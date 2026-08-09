@@ -33,6 +33,7 @@ export const FIELD_LABELS: Record<FieldName, string> = {
 export type FeedEntry =
   | { kind: "question"; text: string; seq: number }
   | { kind: "answer"; text: string; seq: number }
+  | { kind: "closing"; text: string } // spoken sign-off: responders notified
   | { kind: "info"; text: string }
   | { kind: "error"; text: string };
 
@@ -452,21 +453,44 @@ export function useInterview() {
           case "fields":
             setFields((prev) => ({ ...emptyFields(), ...prev, ...msg.known }));
             break;
-          case "complete":
-            setInterviewId(msg.interview_id);
-            setPhase("complete");
-            push({ kind: "info", text: `Interview complete (${msg.interview_id}).` });
-            cleanup();
+          case "closing":
+            // Sign-off audio follows; no answer expected, so no VAD arming.
+            questionSampleRateRef.current = msg.sample_rate ?? 24000;
+            discardAudioRef.current = false;
+            clearSilenceTimer();
+            push({ kind: "closing", text: msg.text });
+            setPhase("asking");
             break;
-          case "no_response":
+          case "complete": {
             setInterviewId(msg.interview_id);
-            setPhase("ended");
-            push({
-              kind: "error",
-              text: `No response after 3 attempts — case marked no-response (${msg.interview_id}).`,
-            });
-            cleanup();
+            // Let the spoken closing finish before tearing down audio.
+            const ctx = playCtxRef.current;
+            const waitMs = ctx
+              ? Math.max(0, (nextPlayTimeRef.current - ctx.currentTime) * 1000) + 300
+              : 0;
+            listenTimerRef.current = setTimeout(() => {
+              setPhase("complete");
+              push({ kind: "info", text: `Interview complete (${msg.interview_id}).` });
+              cleanup();
+            }, waitMs);
             break;
+          }
+          case "no_response": {
+            setInterviewId(msg.interview_id);
+            const ctx = playCtxRef.current;
+            const waitMs = ctx
+              ? Math.max(0, (nextPlayTimeRef.current - ctx.currentTime) * 1000) + 300
+              : 0;
+            listenTimerRef.current = setTimeout(() => {
+              setPhase("ended");
+              push({
+                kind: "error",
+                text: `No response after 3 attempts — case marked no-response (${msg.interview_id}).`,
+              });
+              cleanup();
+            }, waitMs);
+            break;
+          }
           case "error":
             push({ kind: "error", text: msg.message });
             if (phaseRef.current === "processing") {
